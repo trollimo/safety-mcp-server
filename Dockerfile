@@ -16,6 +16,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY safety_mcp/ safety_mcp/
 COPY server.py approver.py ./
 COPY wrapper/ wrapper/
+COPY docker/ docker/
+RUN chmod 755 /app/docker/*.sh /app/wrapper/* \
+ && mkdir -p /data && chown approver:approver /data && chmod 700 /data   # владелец нового тома approver-state
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SAFETY_CONF=/conf
 USER mcp
-ENTRYPOINT ["python", "/app/server.py"]
+ENTRYPOINT ["/app/docker/entry.sh", "python", "/app/server.py"]

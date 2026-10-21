@@ -858,3 +858,11 @@ Approver слушает `0.0.0.0:8765` внутри контейнера, на �
   отклоняет команды, затрагивающие `safety-support` или `.ssh`. Конфиг в контейнере — `/conf`,
   переменные `SAFETY_CONF`, `SAFETY_HOME`, `SAFETY_ALLOW_WRITABLE`. `deploy.sh --install-keys` заменяет строку
   с тем же ключом, а не дублирует; по умолчанию берёт конфиг из `local/conf`.
+- **Ключи без требований к правам на хосте**: папки ключей монтируются только для чтения в `/keys-src` и
+  `/keys-rw-src` (`SAFETY_KEYS_RO_DIR` / `SAFETY_KEYS_RW_DIR`, по умолчанию `keys-ro` / `keys-rw`); точка входа
+  `docker/entry.sh` копирует их в tmpfs `/keys` и `/keys-rw` (владелец — пользователь сервиса, права 600, CRLF
+  убирается). Пути ключей в `inventory.json` не меняются.
+- **Windows**: `docker-compose.windows.yml` (секрет OTP в томе `safety-approver-state`) и скрипты `windows\*.ps1`:
+  `init` (каталоги, токен, ключи через контейнер), `compose`, `keyscan` (LF вместо UTF-16 от `>>`), `deploy`
+  (`deploy.sh` в контейнере, ключ доступа через `ssh-agent`), `open-new-requests`. `.ps1` — UTF-8 с BOM,
+  `.gitattributes` держит LF для скриптов, которые выполняются в Linux.

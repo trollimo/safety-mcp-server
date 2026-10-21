@@ -1,0 +1,11 @@
+# Скрипты и конфиги выполняются в Linux-контейнере и на серверах: всегда LF, даже при checkout на Windows
+*.sh              text eol=lf
+wrapper/*         text eol=lf
+*.json            text eol=lf
+*.yml             text eol=lf
+Dockerfile        text eol=lf
+.env.example      text eol=lf
+conf.example/*    text eol=lf
+*.py              text eol=lf
+# PowerShell: CRLF и UTF-8 с BOM (Windows PowerShell 5.1 без BOM читает кириллицу как ANSI)
+*.ps1             text eol=crlf

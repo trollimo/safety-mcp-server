@@ -24,6 +24,9 @@ services:
     image: safety-mcp-server:0.1.0
     user: mcp
     restart: unless-stopped
+    tmpfs:
+      - /tmp
+      - /keys:uid=${MCP_UID:-1000},gid=${MCP_GID:-1000},mode=0700   # сюда entry.sh копирует ключи с правами 600
     environment:
       MCP_TRANSPORT: http
       MCP_HTTP_BIND: 0.0.0.0                  # внутри контейнера; снаружи порт открыт только на 127.0.0.1
@@ -49,9 +52,9 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      - type: bind                 # ТОЛЬКО ro-ключи
-        source: ./keys-ro
-        target: /keys
+      - type: bind                 # ТОЛЬКО ro-ключи; права на хосте не важны (копируются в tmpfs /keys)
+        source: ${SAFETY_KEYS_RO_DIR:-./keys-ro}
+        target: /keys-src
         read_only: true
         bind:
           create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
@@ -77,7 +80,10 @@ services:
     image: safety-mcp-server:0.1.0
     user: approver
     restart: unless-stopped
-    entrypoint: ["python", "/app/approver.py"]
+    tmpfs:
+      - /tmp
+      - /keys-rw:uid=${APPROVER_UID:-1001},gid=${APPROVER_GID:-1001},mode=0700
+    entrypoint: ["/app/docker/entry.sh", "python", "/app/approver.py"]
     command: ["serve", "--bind", "0.0.0.0", "--port", "8765"]
     environment:
       MCP_QUEUE_DIR: /queue
@@ -93,9 +99,9 @@ services:
         read_only: true
         bind:
           create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
-      - type: bind                 # ТОЛЬКО здесь
-        source: ./keys-rw
-        target: /keys-rw
+      - type: bind                 # ТОЛЬКО здесь; копируются в tmpfs /keys-rw
+        source: ${SAFETY_KEYS_RW_DIR:-./keys-rw}
+        target: /keys-rw-src
         read_only: true
         bind:
           create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root

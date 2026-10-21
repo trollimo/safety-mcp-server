@@ -1,0 +1,15 @@
+# Windows (Docker Desktop): дополнение к docker-compose.yml.
+# Ключи — обычные папки (local\keys-ro, local\keys-rw или SAFETY_KEYS_RO_DIR / SAFETY_KEYS_RW_DIR в local\.env):
+# права на NTFS не важны, контейнер сам копирует ключи в память с правами 600.
+# Секрет OTP хранится в томе Docker, а не в папке Windows: там он недоступен другим программам Windows.
+# Том создаётся автоматически при первом запуске. Использование: .\windows\compose.ps1 up -d
+services:
+  approver:
+    volumes:
+      - type: volume               # заменяет bind ./approver-state
+        source: safety-approver-state
+        target: /data
+
+volumes:
+  safety-approver-state:
+    name: safety-approver-state

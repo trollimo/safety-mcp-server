@@ -21,6 +21,7 @@
 - [Возможности](#возможности)
 - [Как это работает](#как-это-работает)
 - [Быстрый старт](#быстрый-старт)
+- [Windows](#windows)
 - [Инструменты для агента](#инструменты-для-агента)
 - [Подтверждение изменений](#подтверждение-изменений)
 - [Конфигурация](#конфигурация)
@@ -105,6 +106,10 @@ docker compose build
 ```
 
 ### 2. Ключи и каталоги
+
+Права на файлы ключей на машине с Docker не важны: контейнер при старте копирует ключи из `keys-ro`/`keys-rw`
+в память с правами 600. Владелец `keys-rw` (`APPROVER_UID`) нужен только для того, чтобы вы и агент не могли
+прочитать rw-ключ.
 
 Проще всего скриптом: он создаёт `local/` из `conf.example/` и `.env.example`, генерирует ключи, токен MCP
 (`local/mcp-token`) и ставит права.
@@ -248,6 +253,84 @@ claude mcp add --transport http safety-mcp-server http://127.0.0.1:8766/mcp \
 
 MCP работает и **без OTP**: команды `ro` доступны, `rw` возвращают ошибку с командой настройки
 (текст задаётся переменной `MCP_ENROLL_HINT` в `local/.env`).
+
+## Windows
+
+Нужен Docker Desktop (WSL 2). Bash, ssh и настройка прав на файлы **не нужны**. Ключи — обычные файлы
+в папке: при старте контейнер сам копирует их в память с правами 600. На NTFS права всегда выглядят как 0777,
+и ssh иначе отказался бы от такого ключа. Секрет OTP хранится в томе Docker `safety-approver-state`, а не в папке
+Windows. Том создаётся автоматически.
+
+Все команды выполняются в PowerShell из корня проекта. Если система запрещает запуск скриптов, сначала выполните
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+**1. Образ**
+
+```powershell
+docker compose build                                   # или без интернета:
+docker load -i dist\safety-mcp-server-<версия>.tar.gz
+```
+
+**2. Каталог данных, токен и ключи**
+
+```powershell
+.\windows\init.ps1 -Keys vpn          # local\, токен local\mcp-token, ключи safety_vpn_ro / safety_vpn_rw
+```
+
+Появятся папки `local\keys-ro` и `local\keys-rw`. Если ключи уже есть, просто положите их туда
+(`safety_<стенд>_ro` и `.pub` в `keys-ro`, `safety_<стенд>_rw` и `.pub` в `keys-rw`). Ключи должны быть без
+пароля. Папки можно вынести в другое место, указав путь в `local\.env`:
+
+```ini
+SAFETY_KEYS_RO_DIR=C:\safety\keys-ro
+SAFETY_KEYS_RW_DIR=C:\safety\keys-rw
+```
+
+После замены ключей перезапустите сервисы: `.\windows\compose.ps1 up -d --force-recreate`.
+
+**3. Конфиг и ключи хостов**
+
+Заполните `local\conf\inventory.json` и `commands.json` (см. [Конфигурация](#конфигурация)). Пути ключей указываются
+как в контейнере: `/keys/safety_vpn_ro`, `/keys-rw/safety_vpn_rw`. Ключ хоста:
+
+```powershell
+.\windows\keyscan.ps1 -Stand vpn -Address 10.0.0.5      # покажет отпечаток: сверьте его с сервером
+```
+
+Не используйте `ssh-keyscan ... >> known_hosts`: в PowerShell `>>` пишет файл в UTF-16, и ssh его не прочитает.
+
+**4. Обёртка на хостах**
+
+```powershell
+.\windows\deploy.ps1 -Stand vpn -DeployKey $HOME\.ssh\id_ed25519 -InstallKeys
+```
+
+`-DeployKey` — ваш обычный ключ доступа к `ssh_user`. Он только читается. Если у ключа есть пароль, его спросит
+`ssh-add`. Скрипт запускает `wrapper/deploy.sh` в контейнере.
+
+**5. FreeOTP** (в своём окне PowerShell, не через агента)
+
+```powershell
+.\windows\compose.ps1 run --rm approver enroll --account <имя>
+```
+
+**6. Запуск и подключение**
+
+```powershell
+.\windows\compose.ps1 up -d
+Start-Process powershell -WindowStyle Minimized -ArgumentList '-File', '.\windows\open-new-requests.ps1'
+```
+
+`windows\compose.ps1` — это `docker compose` с `local\` и `docker-compose.windows.yml`; любые аргументы передаются
+как есть (`logs -f`, `down`, `ps`). Подключение агента такое же, как в [п. 7](#7-подключение-агента). Путь к токену
+в `opencode.json` пишется с прямыми слешами:
+`"Bearer {file:C:/path/to/safety-mcp-server/local/mcp-token}"`.
+
+> [!WARNING]
+> В Windows все файлы пользователя, включая rw-ключ и токен, может прочитать любая программа этого пользователя.
+> Это относится и к агенту, если ему разрешены команды или чтение вне проекта. Вынесите `keys-rw` за пределы
+> рабочего каталога агента (`SAFETY_KEYS_RW_DIR`) и запретите агенту shell и Docker. Строже — запускать агента
+> под другой учётной записью Windows.
 
 ## Инструменты для агента
 
@@ -501,7 +584,9 @@ SAFETY_CONF=local/conf python3 server.py gen-rules <стенд> <хост> ro
 safety-mcp-server/
 ├── server.py                 # MCP-сервер и CLI
 ├── approver.py               # approver: serve / enroll
-├── init-local.sh             # создание local/ из шаблонов и генерация ключей
+├── init-local.sh             # создание local/ из шаблонов и генерация ключей (Linux)
+├── windows/                  # init, compose, keyscan, deploy, open-new-requests (PowerShell)
+├── docker/                   # entry.sh (ключи в tmpfs с правами 600) и вспомогательные скрипты для Windows
 ├── safety_mcp/
 │   ├── config.py             # загрузка и валидация конфига
 │   ├── core.py               # выбор хостов, сборка команды, regex правил
@@ -523,7 +608,8 @@ safety-mcp-server/
 ├── docs/TASK.md              # полное техническое задание
 ├── local/                    # ваши данные (не в git): conf, keys-ro, keys-rw, state, queue, approver-state, mcp-token, .env
 ├── Dockerfile
-└── docker-compose.yml
+├── docker-compose.yml
+└── docker-compose.windows.yml # Windows: секрет OTP в томе Docker
 ```
 
 ## Ограничения и планы
