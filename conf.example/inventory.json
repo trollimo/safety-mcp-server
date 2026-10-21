@@ -1,0 +1,25 @@
+{
+  "settings": {"max_parallel": 5, "max_hosts": 20},
+  "stands": {
+    "dev": {
+      "ssh_user": "opsuser",
+      "known_hosts": "known_hosts.dev",
+      "keys": {"ro": "/keys/mcp_dev_ro", "rw": "/keys-rw/mcp_dev_rw"},
+      "agent_otp": true,
+      "hosts": {
+        "dev-sw-m1": {"address": "10.10.0.11", "tags": ["swarm_manager", "docker"]},
+        "dev-sw-w1": {"address": "10.10.0.21", "tags": ["swarm_worker", "docker"]},
+        "dev-sw-w2": {"address": "10.10.0.22", "tags": ["swarm_worker", "docker"]}
+      }
+    },
+    "prod": {
+      "ssh_user": "opsuser",
+      "known_hosts": "known_hosts.prod",
+      "keys": {"ro": "/keys/mcp_prod_ro"},
+      "max_parallel": 10,
+      "hosts": {
+        "prod-app1": {"address": "10.20.0.11", "tags": ["app"]}
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "common": {
+    "read": {
+      "disk_free_all": {
+        "description": "Свободное место по всем точкам монтирования",
+        "tags": [], "pick": "all",
+        "cmd": "df -h"
+      },
+      "disk_free_opt": {
+        "description": "Свободное место только для /opt",
+        "tags": [], "pick": "all",
+        "cmd": "df -h /opt"
+      }
+    },
+    "write": {
+      "file_create": {
+        "description": "Создать пустой файл в каталоге ~/mcp-sandbox (каталог должен существовать)",
+        "tags": [], "pick": "host",
+        "params": {"path": "mcp-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}"},
+        "cmd": "touch -- {path}"
+      },
+      "file_delete": {
+        "description": "Удалить файл в каталоге ~/mcp-sandbox (каталоги не удаляет)",
+        "tags": [], "pick": "host",
+        "params": {"path": "mcp-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}"},
+        "cmd": "rm -f -- {path}"
+      }
+    }
+  },
+  "stands": {
+    "dev": {
+      "read": {
+        "swarm_nodes_list": {
+          "description": "Список нод Docker Swarm (на manager)",
+          "tags": ["swarm_manager"], "pick": "first",
+          "cmd": "sudo -n docker node ls"
+        }
+      }
+    },
+    "prod": {}
+  }
+}

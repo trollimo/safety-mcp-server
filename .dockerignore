@@ -1,0 +1,17 @@
+# в контекст сборки попадает только код; конфиги, ключи и состояние — никогда
+.git
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+local
+dist
+conf
+keys-ro
+keys-rw
+state
+queue
+approver-state
+.env
+tests
+docs

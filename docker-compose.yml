@@ -1,0 +1,54 @@
+# MCP-сервер (его видит агент) и approver (подтверждение записи) — один образ, разные пользователи и тома.
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  safety-mcp-server:
+    <<: *hardening
+    build:
+      context: .
+      args:
+        PYTHON_VERSION: "${PYTHON_VERSION:-3.12}"
+        MCP_UID: "${MCP_UID:-1000}"
+        MCP_GID: "${MCP_GID:-1000}"
+        APPROVER_UID: "${APPROVER_UID:-1001}"
+        APPROVER_GID: "${APPROVER_GID:-1001}"
+    image: safety-mcp-server:0.1.0
+    stdin_open: true            # MCP работает по stdio
+    user: mcp
+    environment:
+      MCP_STATE_DIR: /state
+      MCP_QUEUE_DIR: /queue
+      APPROVER_URL: http://127.0.0.1:8765
+      MCP_ENROLL_HINT: "${MCP_ENROLL_HINT:-docker compose run --rm approver enroll --account <имя>}"
+    volumes:
+      - ./conf:/etc/mcp-ssh:ro               # inventory.json, commands.json, known_hosts.*
+      - ./keys-ro:/keys:ro                   # ТОЛЬКО ro-ключи
+      - ./state:/state                       # audit.log
+      - ./queue/requests:/queue/requests     # MCP пишет заявки
+      - ./queue/results:/queue/results:ro    # результаты пишет approver
+
+  approver:
+    <<: *hardening
+    image: safety-mcp-server:0.1.0
+    user: approver
+    entrypoint: ["python", "/app/approver.py"]
+    command: ["serve", "--bind", "0.0.0.0", "--port", "8765"]
+    environment:
+      MCP_QUEUE_DIR: /queue
+      APPROVER_DATA: /data
+      APPROVER_ACCOUNT: "${APPROVER_ACCOUNT:-operator}"
+    ports:
+      - "127.0.0.1:8765:8765"              # страница доступна только с этой машины
+    volumes:
+      - ./conf:/etc/mcp-ssh:ro
+      - ./keys-rw:/keys-rw:ro                # ТОЛЬКО здесь
+      - ./approver-state:/data               # otp.json, аудит approver
+      - ./queue/requests:/queue/requests:ro
+      - ./queue/results:/queue/results
