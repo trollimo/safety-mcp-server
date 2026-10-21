@@ -9,7 +9,9 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Annotated, Callable
+
+from pydantic import Field
 
 from .config import Command, Config, Stand
 from .core import ToolError, build_command, command_regex, select_hosts
@@ -35,10 +37,22 @@ class ToolSpec:
     fn: Callable[..., str]
 
 
-def _with_signature(fn, params: list[tuple[str, bool]]):
-    """params: [(имя, обязательный)]; параметры строковые, кроме dry_run (bool, по умолчанию false)."""
+def _with_signature(fn, params: list[tuple]):
+    """params: [(имя, обязательный[, описание[, шаблон]])]; строковые, кроме dry_run (bool, по умолчанию false).
+    Описание и шаблон попадают в JSON-схему для агента; проверка значения выполняется нашим кодом."""
     sig_params, ann = [], {}
-    for name, required in params:
+    for item in params:
+        name, required = item[0], item[1]
+        desc = item[2] if len(item) > 2 else None
+        pattern = item[3] if len(item) > 3 else None
+        if desc or pattern:
+            extra = {"pattern": f"^({pattern})$"} if pattern else None
+            base = str if required else (str | None)
+            typ = Annotated[base, Field(description=desc or None, json_schema_extra=extra)]
+            kw = {} if required else {"default": None}
+            sig_params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, annotation=typ, **kw))
+            ann[name] = typ
+            continue
         if name == "dry_run":
             sig_params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=False, annotation=bool))
             ann[name] = bool
@@ -60,6 +74,13 @@ def _with_signature(fn, params: list[tuple[str, bool]]):
 
 def _prefix(stand: str) -> str:
     return f"[СТЕНД: {stand.upper()}] "
+
+
+def _param_specs(cmd: Command) -> list[tuple]:
+    return [(p, True, cmd.param_desc.get(p) or f"Шаблон: {rx}", rx) for p, rx in cmd.params.items()]
+
+
+HOST_DESC = ("Имя хоста стенда (см. <стенд>_ro_hosts_list). Несколько хостов — через запятую: h1,h2,h3")
 
 
 def _safe(fn):
@@ -107,12 +128,14 @@ short (по умолчанию) — PASS/FAIL, код ответа и время
 
 ВЫБОР ХОСТА
 Команда выполняется на хостах с нужными тегами (указаны в описании инструмента): на первом подходящем,
-на всех подходящих (параллельно) или на указанном в параметре host (тогда он обязателен).
+на всех подходящих (параллельно) или на указанных в параметре host (тогда он обязателен).
+В host можно перечислить несколько хостов через запятую: host="h1,h2,h3".
 Параметры команд проверяются по шаблону; значения вне шаблона отклоняются.
 
 ИЗМЕНЕНИЯ (rw) — ПОРЯДОК
 1. Вызовите <стенд>_rw_<команда>. Получите id заявки и точную команду.
 2. Покажите человеку стенд, хост и точную команду. Попросите подтвердить.
+   Несколько хостов (host="h1,h2,h3" или команда с выполнением на всех хостах) — это ОДНА заявка и ОДИН код.
 3. Подтверждение делает ЧЕЛОВЕК 6-значным кодом из FreeOTP:
    а) на странице approver (откроется у человека автоматически), или
    б) человек сообщает код вам, и вы вызываете rw_approve(id, code) — только для стендов, где это разрешено.
@@ -154,13 +177,14 @@ def _read_tool(cfg: Config, stand: Stand, cmd: Command, audit: Audit) -> ToolSpe
         return run_on_hosts(stand, hosts, "ro", remote, audit, stand.max_parallel)
 
     where = {"first": "на первом подходящем хосте", "all": "на ВСЕХ подходящих хостах параллельно",
-             "host": "на указанном хосте (параметр host обязателен)"}[cmd.pick]
+             "host": "на указанных хостах (host обязателен; несколько — через запятую)"}[cmd.pick]
     tags = f" Теги хоста: {', '.join(cmd.tags)}." if cmd.tags else ""
     desc = (f"{_prefix(stand.name)}{cmd.description or cmd.name}. ЧТЕНИЕ, выполняется {where}.{tags}"
             f" Команда на сервере: `{cmd.cmd}`. dry_run=true: показать хосты и команду, ничего не выполняя.")
     if cmd.params:
-        desc += " Параметры: " + ", ".join(f"{p} (шаблон {rx})" for p, rx in cmd.params.items()) + "."
-    fn = _with_signature(_safe(run), [("host", cmd.pick == "host")] + [(p, True) for p in cmd.params]
+        desc += " Параметры: " + ", ".join(
+            f"{p} ({cmd.param_desc[p] + '; ' if p in cmd.param_desc else ''}шаблон {rx})" for p, rx in cmd.params.items()) + "."
+    fn = _with_signature(_safe(run), [("host", cmd.pick == "host", HOST_DESC)] + _param_specs(cmd)
                          + [("dry_run", False)])
     return ToolSpec(tool_name(stand.name, "ro", cmd.name), desc, fn)
 
@@ -170,26 +194,32 @@ def _write_tool(cfg: Config, stand: Stand, cmd: Command, queue: Queue, approver_
         host = kw.pop("host", None)
         dry = kw.pop("dry_run", False)
         remote = build_command(cmd, kw)
-        h = select_hosts(cfg, stand, cmd, host)[0]
+        hosts = select_hosts(cfg, stand, cmd, host)
         if dry:
-            return _dry_run(stand, "rw", cmd, [h], remote)
+            return _dry_run(stand, "rw", cmd, hosts, remote)
         if not queue.enrolled():
             return not_enrolled_message()
-        req = queue.new_request(stand.name, h.name, cmd.name, remote)
+        req = queue.new_request(stand.name, [h.name for h in hosts], cmd.name, remote)
+        names = ",".join(h.name for h in hosts)
         how = f"на странице {approver_url.rstrip('/')}/r/{req['id']} (откроется автоматически)"
         if stand.agent_otp:
             how += f", либо сообщает код вам — тогда вызовите rw_approve(id=\"{req['id']}\", code=\"<6 цифр>\")"
-        return (f"[stand={stand.name} host={h.name} role=rw] ЗАЯВКА СОЗДАНА, НЕ ВЫПОЛНЕНА\n"
-                f"id: {req['id']}\nкоманда: {remote}\n"
-                f"Покажите человеку стенд, хост и команду. Человек подтверждает кодом из FreeOTP {how}.\n"
+        return (f"[stand={stand.name} hosts={names} role=rw] ЗАЯВКА СОЗДАНА, НЕ ВЫПОЛНЕНА\n"
+                f"id: {req['id']}\nхосты ({len(hosts)}): {names}\nкоманда: {remote}\n"
+                f"Одна заявка на все хосты: подтверждается ОДНИМ кодом. Покажите человеку стенд, хосты и команду. "
+                f"Человек подтверждает кодом из FreeOTP {how}.\n"
                 f"Заявка действует 10 минут. Результат: rw_result(id=\"{req['id']}\").")
 
-    desc = (f"{_prefix(stand.name)}{cmd.description or cmd.name}. ИЗМЕНЕНИЕ: не выполняется сразу, а создаёт заявку; "
-            f"нужен 6-значный код OTP от человека (см. about). Команда на сервере: `{cmd.cmd}`. "
+    where = {"first": "на первом подходящем хосте", "all": "на ВСЕХ подходящих хостах",
+             "host": "на указанных хостах (host обязателен, несколько — через запятую)"}[cmd.pick]
+    desc = (f"{_prefix(stand.name)}{cmd.description or cmd.name}. ИЗМЕНЕНИЕ {where}: не выполняется сразу, а создаёт "
+            f"ОДНУ заявку на все выбранные хосты; нужен один 6-значный код OTP от человека (см. about). "
+            f"Команда на сервере: `{cmd.cmd}`. "
             f"dry_run=true: показать хост и команду, заявку не создавать.")
     if cmd.params:
-        desc += " Параметры: " + ", ".join(f"{p} (шаблон {rx})" for p, rx in cmd.params.items()) + "."
-    fn = _with_signature(_safe(run), [("host", cmd.pick == "host")] + [(p, True) for p in cmd.params]
+        desc += " Параметры: " + ", ".join(
+            f"{p} ({cmd.param_desc[p] + '; ' if p in cmd.param_desc else ''}шаблон {rx})" for p, rx in cmd.params.items()) + "."
+    fn = _with_signature(_safe(run), [("host", cmd.pick == "host", HOST_DESC)] + _param_specs(cmd)
                          + [("dry_run", False)])
     return ToolSpec(tool_name(stand.name, "rw", cmd.name), desc, fn)
 
@@ -220,8 +250,9 @@ def _http_tool(scope_name: str, ep, cmd: Command, audit: Audit) -> ToolSpec:
             f"Проверки: {', '.join(checks) or 'любой ответ'}. mode=short (по умолчанию): результат, код и время; "
             f"mode=all: полный ответ (заголовки и тело). dry_run=true: показать запрос, не отправляя.")
     if cmd.params:
-        desc += " Параметры: " + ", ".join(f"{p} (шаблон {rx})" for p, rx in cmd.params.items()) + "."
-    fn = _with_signature(_safe(run), [(p, True) for p in cmd.params] + [("mode", False), ("dry_run", False)])
+        desc += " Параметры: " + ", ".join(
+            f"{p} ({cmd.param_desc[p] + '; ' if p in cmd.param_desc else ''}шаблон {rx})" for p, rx in cmd.params.items()) + "."
+    fn = _with_signature(_safe(run), _param_specs(cmd) + [("mode", False), ("dry_run", False)])
     return ToolSpec(tool_name(scope_name, "ro", cmd.name), desc, fn)
 
 
@@ -248,7 +279,8 @@ def _hosts_tool(stand: Stand) -> ToolSpec:
 
 
 def _format_result(res: dict) -> str:
-    head = f"[stand={res.get('stand')} host={res.get('host')} role=rw] status={res.get('status')}"
+    hosts = ",".join(res.get("hosts") or [])
+    head = f"[stand={res.get('stand')} hosts={hosts} role=rw] status={res.get('status')}"
     if "rc" in res:
         head += f" rc={res['rc']}"
     if res.get("reason"):

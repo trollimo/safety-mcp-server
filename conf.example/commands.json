@@ -57,7 +57,10 @@
         "tags": [],
         "pick": "host",
         "params": {
-          "path": "mcp-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}"
+          "path": {
+            "pattern": "mcp-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}",
+            "description": "Путь к файлу внутри ~/mcp-sandbox, например mcp-sandbox/test.txt"
+          }
         },
         "cmd": "touch -- {path}"
       },
@@ -66,7 +69,10 @@
         "tags": [],
         "pick": "host",
         "params": {
-          "path": "mcp-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}"
+          "path": {
+            "pattern": "mcp-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}",
+            "description": "Путь к удаляемому файлу внутри ~/mcp-sandbox"
+          }
         },
         "cmd": "rm -f -- {path}"
       }

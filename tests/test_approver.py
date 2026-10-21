@@ -175,8 +175,13 @@ def test_expired(env):
 @pytest.mark.parametrize("mutate", [
     lambda r: r.update(cmd="touch -- /etc/passwd"),                       # хэш не совпадёт
     lambda r: r.update(cmd="df -h", cmd_sha256=__import__("hashlib").sha256(b"df -h").hexdigest()),
-    lambda r: r.update(host="prod-w1"),
-    lambda r: r.update(stand="prod", host="prod-w1"),                     # у prod нет rw
+    lambda r: r.update(hosts=["prod-w1"]),                                # хост другого стенда
+    lambda r: r.update(hosts=["dev-w1", "prod-w1"]),                     # чужой хост в списке
+    lambda r: r.update(hosts=["dev-w1", "dev-w1"]),                      # повтор
+    lambda r: r.update(hosts=["evil.example"]),                          # хоста нет в инвентаре
+    lambda r: r.update(hosts=[]),
+    lambda r: r.update(hosts="dev-w1"),                                  # не список
+    lambda r: r.update(stand="prod", hosts=["prod-w1"]),                 # у prod нет rw
     lambda r: r.update(created=r["created"] + 3600),                     # дата из будущего
 ])
 def test_tampered_request_rejected(env, mutate):
@@ -184,12 +189,54 @@ def test_tampered_request_rejected(env, mutate):
     key, _ = do_enroll(ap, clock)
     clock.t += 30
     rid = new_req(q, clock)
+    csrf = ap.view(rid)["csrf"]          # настоящий CSRF: отказ должен быть из-за подмены, а не токена
     path = os.path.join(q.requests, rid + ".json")
     r = json.load(open(path))
     mutate(r)
     json.dump(r, open(path, "w"))
-    ok, msg = ap.approve(rid, totp.totp(key, clock()), "x")
+    ok, msg = ap.approve(rid, totp.totp(key, clock()), csrf)
     assert not ok and not runner.calls
+    assert "CSRF" not in msg
+
+
+def test_untampered_control(env):
+    """Контроль к тесту выше: без подмены та же последовательность проходит."""
+    ap, q, runner, clock = env
+    key, _ = do_enroll(ap, clock)
+    clock.t += 30
+    rid = new_req(q, clock)
+    csrf = ap.view(rid)["csrf"]
+    assert ap.approve(rid, totp.totp(key, clock()), csrf)[0] and len(runner.calls) == 1
+
+
+def test_multi_host_one_code(env):
+    ap, q, runner, clock = env
+    key, _ = do_enroll(ap, clock)
+    clock.t += 30
+    rid = q.new_request("dev", ["dev-w2", "dev-m1", "dev-w1"], "file_create", "touch -- mcp-sandbox/a", now=clock())["id"]
+    v = ap.view(rid)
+    assert [h.name for h in v["hosts"]] == ["dev-m1", "dev-w1", "dev-w2"]
+    ok, msg = ap.approve(rid, totp.totp(key, clock()), v["csrf"])
+    assert ok, msg
+    assert sorted(c[1] for c in runner.calls) == ["dev-m1", "dev-w1", "dev-w2"]
+    res = q.result(rid)
+    assert res["status"] == "approved-ok" and "SUMMARY: ok=3 failed=0" in res["output"]
+    assert res["hosts"] == ["dev-w2", "dev-m1", "dev-w1"]
+
+
+def test_multi_host_partial_failure(cfg, tmp_path):
+    clock = Clock()
+    q = Queue(str(tmp_path / "queue"))
+
+    def runner(stand, host, role, cmd, audit, *a):
+        return (1, "fail\n") if host.name == "dev-w2" else (0, "ok\n")
+    ap = Approver(cfg, q, str(tmp_path / "data"), runner=runner, clock=clock)
+    key, _ = do_enroll(ap, clock)
+    clock.t += 30
+    rid = q.new_request("dev", ["dev-w1", "dev-w2"], "file_create", "touch -- mcp-sandbox/a", now=clock())["id"]
+    ok, _ = ap.approve(rid, totp.totp(key, clock()), ap.view(rid)["csrf"])
+    res = q.result(rid)
+    assert not ok and res["status"] == "approved-failed" and "SUMMARY: ok=1 failed=1" in res["output"]
 
 
 def test_not_enrolled(env):

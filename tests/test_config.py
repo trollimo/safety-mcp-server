@@ -114,11 +114,21 @@ def test_placeholder_param_mismatch(make_cfg):
         make_cfg(commands=c)
 
 
-def test_write_pick_all_rejected(make_cfg):
+def test_write_pick_all_allowed(make_cfg):
     c = copy.deepcopy(COMMANDS)
     c["common"]["write"]["file_create"]["pick"] = "all"
-    with pytest.raises(ConfigError, match="pick: all"):
-        make_cfg(commands=c)
+    assert make_cfg(commands=c).command("dev", "file_create").pick == "all"
+
+
+def test_param_object_with_description(make_cfg):
+    c = copy.deepcopy(COMMANDS)
+    c["common"]["write"]["file_create"]["params"]["path"] = {"pattern": "mcp-sandbox/[a-z]+", "description": "Путь"}
+    cmd = make_cfg(commands=c).command("dev", "file_create")
+    assert cmd.params == {"path": "mcp-sandbox/[a-z]+"} and cmd.param_desc == {"path": "Путь"}
+    for bad in ({"description": "x"}, {"pattern": r"\d+"}, {"pattern": "a", "x": 1}, {"pattern": "a", "description": 5}):
+        c["common"]["write"]["file_create"]["params"]["path"] = bad
+        with pytest.raises(ConfigError):
+            make_cfg(commands=c)
 
 
 @pytest.mark.parametrize("field", ["auth", "headers", "body", "via", "scope", "method"])

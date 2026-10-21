@@ -14,12 +14,22 @@ class ToolError(Exception):
 def select_hosts(cfg: Config, stand: Stand, cmd: Command, host: str | None) -> list[Host]:
     need = set(cmd.tags)
     if host:
-        h = stand.hosts.get(host)
-        if h is None:
-            raise ToolError(f"хост {host!r} не найден в стенде {stand.name}")
-        if not need <= set(h.tags):
-            raise ToolError(f"у хоста {host} нет тегов {sorted(need - set(h.tags))}, нужных команде {cmd.name}")
-        return [h]
+        names = [n.strip() for n in host.split(",")]
+        if any(not n for n in names):
+            raise ToolError("пустое имя хоста в списке (формат: h1,h2,h3)")
+        if len(set(names)) != len(names):
+            raise ToolError("хост указан несколько раз")
+        if len(names) > cfg.max_hosts:
+            raise ToolError(f"слишком много хостов: {len(names)} > max_hosts={cfg.max_hosts}")
+        out = []
+        for n in names:
+            h = stand.hosts.get(n)
+            if h is None:
+                raise ToolError(f"хост {n!r} не найден в стенде {stand.name}")
+            if not need <= set(h.tags):
+                raise ToolError(f"у хоста {n} нет тегов {sorted(need - set(h.tags))}, нужных команде {cmd.name}")
+            out.append(h)
+        return sorted(out, key=lambda h: h.name)
     if cmd.pick == "host":
         raise ToolError(f"команде {cmd.name} нужен параметр host (хост стенда {stand.name} с тегами {sorted(need)})")
     matching = sorted((h for h in stand.hosts.values() if need <= set(h.tags)), key=lambda h: h.name)

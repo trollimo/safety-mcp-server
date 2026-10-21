@@ -46,11 +46,13 @@ class Queue:
     def ensure(self, which: str) -> None:
         os.makedirs(getattr(self, which), exist_ok=True)
 
-    def new_request(self, stand: str, host: str, command: str, cmd: str, now: float | None = None) -> dict:
+    def new_request(self, stand: str, hosts, command: str, cmd: str, now: float | None = None) -> dict:
+        """Одна заявка на один или несколько хостов: подтверждается одним кодом OTP."""
         now = time.time() if now is None else now
         rid = secrets.token_hex(16)
+        hosts = [hosts] if isinstance(hosts, str) else list(hosts)
         data = {
-            "id": rid, "stand": stand, "host": host, "role": "rw", "command": command, "cmd": cmd,
+            "id": rid, "stand": stand, "hosts": hosts, "role": "rw", "command": command, "cmd": cmd,
             "cmd_sha256": hashlib.sha256(cmd.encode()).hexdigest(),
             "created": int(now), "expires": int(now + REQUEST_TTL),
         }

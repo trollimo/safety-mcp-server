@@ -163,7 +163,7 @@ def test_write_tool_creates_request_not_ssh(cfg, queue, fake):
     assert "ЗАЯВКА СОЗДАНА" in out and not fake.calls
     rid = queue.request_ids()[0]
     req = queue.request(rid)
-    assert req["cmd"] == "touch -- mcp-sandbox/a.txt" and req["host"] == "dev-w1"
+    assert req["cmd"] == "touch -- mcp-sandbox/a.txt" and req["hosts"] == ["dev-w1"]
     assert t["rw_result"].fn(id=rid).startswith("ещё не выполнена")
     assert "ОШИБКА" in t["rw_result"].fn(id="../../etc/passwd")
     assert "ОШИБКА" in t["dev_rw_file_create"].fn(host="dev-w1", path="/etc/passwd")
@@ -265,3 +265,64 @@ def test_unknown_params_rejected_not_ignored(cfg, queue, fake):
     assert not fake.calls
     res = asyncio.run(m.call_tool("dev_ro_disk_free_opt", {"dry_run": True}))
     assert "ПРОБНЫЙ ЗАПУСК" in str(res)
+
+
+def test_write_multi_host_one_request(cfg, queue, fake):
+    queue.write_status(True)
+    t = tools(cfg, queue)
+    out = t["dev_rw_file_create"].fn(host="dev-w2, dev-w1,dev-m1", path="mcp-sandbox/a")
+    assert "хосты (3): dev-m1,dev-w1,dev-w2" in out and "ОДНИМ кодом" in out and not fake.calls
+    assert len(queue.request_ids()) == 1
+    assert queue.request(queue.request_ids()[0])["hosts"] == ["dev-m1", "dev-w1", "dev-w2"]
+
+
+@pytest.mark.parametrize("hosts,msg", [
+    ("dev-w1,prod-w1", "не найден в стенде dev"),     # хост другого стенда
+    ("dev-w1,evil.example", "не найден"),
+    ("dev-w1,dev-w1", "несколько раз"),
+    ("dev-w1,,dev-w2", "пустое имя"),
+    (" , ", "пустое имя"),
+])
+def test_write_multi_host_rejects_foreign_and_bad(cfg, queue, fake, hosts, msg):
+    queue.write_status(True)
+    out = tools(cfg, queue)["dev_rw_file_create"].fn(host=hosts, path="mcp-sandbox/a")
+    assert out.startswith("ОШИБКА") and msg in out, out
+    assert queue.request_ids() == [] and not fake.calls
+
+
+def test_read_multi_host(cfg, queue, fake):
+    out = tools(cfg, queue)["dev_ro_disk_free_worker"].fn(host="dev-w1,dev-w2")
+    assert out.count("[stand=dev host=") == 2 and "SUMMARY: ok=2" in out
+    assert "ОШИБКА" in tools(cfg, queue)["dev_ro_disk_free_worker"].fn(host="dev-w1,dev-m1")  # у m1 нет тега
+
+
+def test_write_pick_all_one_request(make_cfg, queue, fake):
+    import copy
+    from conftest import COMMANDS
+    c = copy.deepcopy(COMMANDS)
+    c["common"]["write"]["file_create"]["pick"] = "all"
+    cfg = make_cfg(commands=c)
+    queue.write_status(True)
+    out = tools(cfg, queue)["dev_rw_file_create"].fn(path="mcp-sandbox/a")
+    assert "хосты (3)" in out and len(queue.request_ids()) == 1
+
+
+def test_param_description_in_schema(make_cfg, queue):
+    import copy
+    from conftest import COMMANDS
+    from mcp.server.fastmcp import FastMCP
+    c = copy.deepcopy(COMMANDS)
+    c["common"]["write"]["file_create"]["params"]["path"] = {
+        "pattern": "mcp-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}", "description": "Путь внутри ~/mcp-sandbox"}
+    cfg = make_cfg(commands=c)
+    m = FastMCP("t")
+    for s in build_tools(cfg, queue, Audit(None), "http://x"):
+        m.add_tool(s.fn, name=s.name, description=s.description)
+    listed = {x.name: x for x in asyncio.run(m.list_tools())}
+    path = listed["dev_rw_file_create"].inputSchema["properties"]["path"]
+    assert path["description"] == "Путь внутри ~/mcp-sandbox" and path["pattern"].startswith("^(mcp-sandbox")
+    host = listed["dev_rw_file_create"].inputSchema["properties"]["host"]
+    assert "через запятую" in host["description"]
+    logs = listed["dev_ro_logs"].inputSchema["properties"]["unit"]
+    assert logs["description"].startswith("Шаблон:")       # без описания в конфиге — шаблон
+    assert "Путь внутри ~/mcp-sandbox" in listed["dev_rw_file_create"].description

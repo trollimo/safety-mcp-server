@@ -13,6 +13,7 @@ import secrets
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
@@ -99,7 +100,7 @@ class Approver:
         return st
 
     def _finish(self, req: dict, status: str, rc=None, output: str = "", reason: str = "") -> dict:
-        res = {"id": req["id"], "stand": req.get("stand"), "host": req.get("host"), "status": status,
+        res = {"id": req["id"], "stand": req.get("stand"), "hosts": req.get("hosts"), "status": status,
                "finished": int(self.clock())}
         if rc is not None:
             res["rc"] = rc
@@ -108,12 +109,12 @@ class Approver:
         if reason:
             res["reason"] = reason
         self.queue.write_result(req["id"], res)
-        self.audit.write(type="approval", id=req["id"], stand=req.get("stand"), host=req.get("host"),
+        self.audit.write(type="approval", id=req["id"], stand=req.get("stand"), hosts=req.get("hosts"),
                          cmd=req.get("cmd"), status=status, rc=rc, reason=reason)
         return res
 
     def load(self, rid: str):
-        """Возвращает (req, stand, host, problem). problem — текст, если заявку выполнять нельзя."""
+        """Возвращает (req, stand, hosts, problem). problem — текст, если заявку выполнять нельзя."""
         if not ID_RE.match(rid or ""):
             return None, None, None, "некорректный id"
         req = self.queue.request(rid)
@@ -123,26 +124,31 @@ class Approver:
         if res and res.get("status") in FINAL:
             return req, None, None, f"заявка уже обработана: {res['status']}"
         stand = self.cfg.stands.get(req.get("stand"))
-        host = stand.hosts.get(req.get("host")) if stand else None
+        names = req.get("hosts")
+        hosts = None
+        if stand is not None and isinstance(names, list) and names and len(names) <= self.cfg.max_hosts \
+                and all(isinstance(n, str) for n in names) and len(set(names)) == len(names):
+            found = [stand.hosts.get(n) for n in names]
+            hosts = None if None in found else sorted(found, key=lambda h: h.name)
         cmd = req.get("cmd")
         problem = None
-        if stand is None or host is None or "rw" not in stand.keys:
-            problem = "стенд или хост не найден в инвентаре, либо у стенда нет ключа rw"
+        if stand is None or hosts is None or "rw" not in stand.keys:
+            problem = "стенд или хосты не найдены в инвентаре, либо у стенда нет ключа rw"
         elif not isinstance(cmd, str) or not CMD_CHARSET_RE.fullmatch(cmd):
             problem = "команда содержит запрещённые символы"
         elif hashlib.sha256(cmd.encode()).hexdigest() != req.get("cmd_sha256"):
             problem = "хэш команды не совпадает"
-        elif matches_write_rule(self.cfg, stand, host, cmd) is None:
-            problem = "команда не соответствует ни одной write-команде стенда"
+        elif any(matches_write_rule(self.cfg, stand, h, cmd) is None for h in hosts):
+            problem = "команда не соответствует write-команде стенда для одного из хостов"
         if problem:
             self._finish(req, "invalid", reason=problem)
-            return req, stand, host, problem
+            return req, stand, hosts, problem
         created = req.get("created")
         now = self.clock()
         if not isinstance(created, int) or created > now + 60 or now > created + REQUEST_TTL:
             self._finish(req, "expired", reason="срок заявки истёк")
-            return req, stand, host, "срок заявки истёк"
-        return req, stand, host, None
+            return req, stand, hosts, "срок заявки истёк"
+        return req, stand, hosts, None
 
     def pending(self) -> list[dict]:
         out = []
@@ -157,11 +163,11 @@ class Approver:
 
     def view(self, rid: str) -> dict:
         with self.lock:
-            req, stand, host, problem = self.load(rid)
+            req, stand, hosts, problem = self.load(rid)
             if problem:
                 return {"req": req, "problem": problem}
             st = self._state(rid)
-            return {"req": req, "host": host, "attempts_left": MAX_ATTEMPTS - st["attempts"], "csrf": st["csrf"],
+            return {"req": req, "hosts": hosts, "attempts_left": MAX_ATTEMPTS - st["attempts"], "csrf": st["csrf"],
                     "enrolled": self.enrolled(), "locked_until": self.locked_until()}
 
     def deny(self, rid: str, csrf: str) -> tuple[bool, str]:
@@ -177,7 +183,7 @@ class Approver:
 
     def approve(self, rid: str, code: str, csrf: str | None, via_agent: bool = False) -> tuple[bool, str]:
         with self.lock:
-            req, stand, host, problem = self.load(rid)
+            req, stand, hosts, problem = self.load(rid)
             if problem:
                 return False, problem
             st = self._state(rid)
@@ -209,11 +215,25 @@ class Approver:
                 return False, f"неверный или уже использованный код; осталось попыток: {left}." + hint
             o["last_step"] = step
             atomic_write_json(self._otp_path(), o, mode=0o600)
-            self.audit.write(type="approval", id=rid, stand=stand.name, host=host.name, status="approved",
-                             channel="agent" if via_agent else "page")
-            rc, out = self.runner(stand, host, "rw", req["cmd"], self.audit)
+            self.audit.write(type="approval", id=rid, stand=stand.name, hosts=[h.name for h in hosts],
+                             status="approved", channel="agent" if via_agent else "page")
+            rc, out = self._execute(stand, hosts, req["cmd"])
             res = self._finish(req, "approved-ok" if rc == 0 else "approved-failed", rc=rc, output=out)
             return rc == 0, f"выполнено: {res['status']} (rc={rc})"
+
+    def _execute(self, stand, hosts, cmd: str) -> tuple[int, str]:
+        """Выполняет одобренную команду на всех хостах заявки параллельно. rc=0, только если везде успешно."""
+        if len(hosts) == 1:
+            return self.runner(stand, hosts[0], "rw", cmd, self.audit)
+        workers = max(1, min(stand.max_parallel, len(hosts)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(lambda h: self.runner(stand, h, "rw", cmd, self.audit), hosts))
+        blocks, failed = [], 0
+        for h, (rc, out) in zip(hosts, results):
+            failed += rc != 0
+            blocks.append(f"[stand={stand.name} host={h.name} role=rw] rc={rc}\n{out}".rstrip())
+        blocks.append(f"SUMMARY: ok={len(hosts) - failed} failed={failed}")
+        return (0 if failed == 0 else 1), "\n\n".join(blocks) + "\n"
 
 
     def process_submissions(self) -> int:
@@ -274,10 +294,12 @@ def render_request(v: dict, message: str = "") -> str:
             body += f"<pre>{e(str(req.get('cmd', '')))}</pre>"
         body += "<p><a href='/'>к списку заявок</a></p></div>"
         return PAGE.format(title="Заявка", color="#57534e", body=body)
-    host = v["host"]
+    hosts = v["hosts"]
     left = max(0, int(req["created"] + REQUEST_TTL - time.time()))
+    host_list = "".join(f"<li><b>{e(h.name)}</b> ({e(h.address)})</li>" for h in hosts)
     body = (f"<div class='stand'>СТЕНД: {e(req['stand'].upper())}</div><div class='card'>"
-            f"<p>Хост: <b>{e(host.name)}</b> ({e(host.address)}) · роль <b>rw</b> · команда <b>{e(req['command'])}</b></p>"
+            f"<p>Роль <b>rw</b> · команда <b>{e(req['command'])}</b> · хостов: <b>{len(hosts)}</b>"
+            f"{' (один код подтверждает все)' if len(hosts) > 1 else ''}</p><ul>{host_list}</ul>"
             f"<pre>{e(req['cmd'])}</pre>"
             f"<p class='muted'>Заявка {e(req['id'])} · осталось {left // 60} мин {left % 60} с · "
             f"время сервера {e(time.strftime('%H:%M:%S'))}</p>")
@@ -310,7 +332,7 @@ def render_index(pending: list[dict]) -> str:
     if not pending:
         rows = "<p>Нет заявок, ожидающих подтверждения.</p>"
     else:
-        rows = "".join(f"<p><a href='/r/{e(r['id'])}'><b>{e(r['stand'].upper())}</b> · {e(r['host'])} · "
+        rows = "".join(f"<p><a href='/r/{e(r['id'])}'><b>{e(r['stand'].upper())}</b> · {e(', '.join(r['hosts']))} · "
                        f"{e(r['cmd'])}</a></p>" for r in pending)
     return PAGE.format(title="Заявки", color="#57534e", body=f"<div class='card'><h2>Заявки</h2>{rows}</div>")
 

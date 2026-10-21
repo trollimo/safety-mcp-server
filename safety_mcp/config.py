@@ -91,6 +91,7 @@ class Command:
     method: str = "GET"      # http
     path: str = ""           # http: шаблон пути
     expect: dict = field(default_factory=dict)  # http: status, body_contains, max_ms
+    param_desc: dict = field(default_factory=dict)  # имя параметра -> описание для агента
 
 
 @dataclass
@@ -148,15 +149,30 @@ def check_ere(regex: str, where: str) -> None:
         raise _err(f"{where}: некорректный regex: {e}") from e
 
 
-def _parse_params(raw: dict, where: str) -> dict:
+def _parse_params(raw: dict, where: str) -> tuple[dict, dict]:
+    """params: имя -> "regex" или {"pattern": "regex", "description": "..."}. Возвращает (шаблоны, описания)."""
     params = raw.get("params", {})
     if not isinstance(params, dict):
         raise _err(f"{where}: params должен быть объектом")
-    for pname, rx in params.items():
+    patterns, descs = {}, {}
+    for pname, spec in params.items():
+        pw = f"{where}.params.{pname}"
         if not PARAM_NAME_RE.match(pname) or pname in RESERVED_PARAMS:
             raise _err(f"{where}: недопустимое имя параметра {pname!r} (зарезервированы: {sorted(RESERVED_PARAMS)})")
-        check_ere(rx, f"{where}.params.{pname}")
-    return dict(params)
+        if isinstance(spec, dict):
+            if set(spec) - {"pattern", "description"} or "pattern" not in spec:
+                raise _err(f"{pw}: ожидается строка-шаблон или объект {{\"pattern\", \"description\"}}")
+            desc = spec.get("description", "")
+            if not isinstance(desc, str) or len(desc) > 300:
+                raise _err(f"{pw}.description: строка до 300 символов")
+            rx = spec["pattern"]
+            if desc:
+                descs[pname] = desc
+        else:
+            rx = spec
+        check_ere(rx, pw)
+        patterns[pname] = rx
+    return patterns, descs
 
 
 def _parse_http_command(name: str, raw: dict, kind: str, origin: str, where: str) -> Command:
@@ -180,7 +196,7 @@ def _parse_http_command(name: str, raw: dict, kind: str, origin: str, where: str
     if method not in HTTP_METHODS:
         raise _err(f"{where}: method {method!r} не поддерживается (только {', '.join(HTTP_METHODS)})")
     path = raw.get("path", "/")
-    params = _parse_params(raw, where)
+    params, param_desc = _parse_params(raw, where)
     if not isinstance(path, str):
         raise _err(f"{where}: path должен быть строкой")
     placeholders = PLACEHOLDER_RE.findall(path)
@@ -206,7 +222,7 @@ def _parse_http_command(name: str, raw: dict, kind: str, origin: str, where: str
         raise _err(f"{where}: description должен быть строкой")
     return Command(name=name, kind=kind, type="http", description=desc, tags=(), pick="first", params=params,
                    cmd="", origin=origin, scope=scope, endpoint=endpoint, method=method, path=path,
-                   expect=dict(expect))
+                   expect=dict(expect), param_desc=param_desc)
 
 
 def _parse_command(name: str, raw: dict, kind: str, origin: str) -> Command:
@@ -232,9 +248,7 @@ def _parse_command(name: str, raw: dict, kind: str, origin: str) -> Command:
     pick = raw.get("pick", "first")
     if pick not in PICKS:
         raise _err(f"{where}: pick должен быть одним из {PICKS}")
-    if kind == "write" and pick == "all":
-        raise _err(f"{where}: команды записи не могут выполняться на всех хостах (pick: all)")
-    params = _parse_params(raw, where)
+    params, param_desc = _parse_params(raw, where)
     placeholders = PLACEHOLDER_RE.findall(cmd)
     if sorted(set(placeholders)) != sorted(params):
         raise _err(f"{where}: плейсхолдеры в cmd {sorted(set(placeholders))} не совпадают с params {sorted(params)}")
@@ -247,7 +261,7 @@ def _parse_command(name: str, raw: dict, kind: str, origin: str) -> Command:
     if not isinstance(desc, str):
         raise _err(f"{where}: description должен быть строкой")
     return Command(name=name, kind=kind, type=ctype, description=desc, tags=tuple(tags),
-                   pick=pick, params=dict(params), cmd=cmd, origin=origin)
+                   pick=pick, params=dict(params), cmd=cmd, origin=origin, param_desc=param_desc)
 
 
 def _parse_command_block(block, origin: str) -> dict[str, dict[str, Command]]:
