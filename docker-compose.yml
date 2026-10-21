@@ -28,7 +28,7 @@ services:
       MCP_STATE_DIR: /state
       MCP_QUEUE_DIR: /queue
       APPROVER_URL: http://127.0.0.1:8765
-      MCP_ENROLL_HINT: "${MCP_ENROLL_HINT:-docker compose run --rm approver enroll --account <имя>}"
+      MCP_ENROLL_HINT: "${MCP_ENROLL_HINT:-docker compose --project-directory local -f docker-compose.yml run --rm approver enroll --account <имя>}"
     volumes:
       - type: bind                 # inventory.json, commands.json, known_hosts.*
         source: ./conf

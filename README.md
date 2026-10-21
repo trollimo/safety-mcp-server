@@ -79,6 +79,22 @@ MCP-сервер и approver — один образ, но **разные пол
 
 ## Быстрый старт
 
+Основной вариант: данные (конфиг, ключи, очередь, состояние) лежат в каталоге **`local/`** внутри проекта.
+Он в `.gitignore` и `.dockerignore`, поэтому не попадёт ни в git, ни в образ. Все команды `docker compose`
+запускаются из корня проекта с параметрами `--project-directory local -f docker-compose.yml`:
+
+```bash
+alias dc='docker compose --project-directory local -f docker-compose.yml'   # для удобства
+```
+
+<details>
+<summary>Альтернатива: данные рядом с <code>docker-compose.yml</code></summary>
+
+Создайте те же каталоги в корне проекта (без префикса `local/`) и запускайте `docker compose` без
+`--project-directory`. Либо укажите любой другой каталог: `--project-directory ~/safety-mcp-data`.
+Если нужного каталога нет, compose завершится ошибкой, а не создаст пустой.
+</details>
+
 ### 1. Образ
 
 ```bash
@@ -88,22 +104,17 @@ docker compose build
 
 ### 2. Ключи и каталоги
 
-Все каталоги данных создаются **рядом с `docker-compose.yml`**. Если хотите держать их отдельно
-(например, в `~/safety-mcp-data`), создайте их там и добавляйте к каждой команде `docker compose`
-параметры `--project-directory ~/safety-mcp-data -f /путь/к/docker-compose.yml`. Если каталога нет,
-compose завершится ошибкой, а не создаст пустой.
-
 ```bash
 ssh-keygen -t ed25519 -N "" -f ~/.ssh/mcp_<стенд>_ro
 ssh-keygen -t ed25519 -N "" -f ~/.ssh/mcp_<стенд>_rw
 
-mkdir -p conf keys-ro keys-rw state queue/requests queue/results approver-state
-cp ~/.ssh/mcp_<стенд>_ro* keys-ro/
-mv ~/.ssh/mcp_<стенд>_rw keys-rw/ && cp ~/.ssh/mcp_<стенд>_rw.pub keys-rw/
-chmod 700 keys-ro keys-rw && chmod 600 keys-ro/mcp_*_ro keys-rw/mcp_*_rw
+mkdir -p local/{conf,keys-ro,keys-rw,state,queue/requests,queue/results,approver-state}
+cp ~/.ssh/mcp_<стенд>_ro* local/keys-ro/
+mv ~/.ssh/mcp_<стенд>_rw local/keys-rw/ && cp ~/.ssh/mcp_<стенд>_rw.pub local/keys-rw/
+chmod 700 local/keys-ro local/keys-rw && chmod 600 local/keys-ro/mcp_*_ro local/keys-rw/mcp_*_rw
 
 # каталоги approver принадлежат APPROVER_UID (1001), остальные — MCP_UID (1000)
-docker run --rm --user 0 --entrypoint chown -v "$PWD:/w" safety-mcp-server:0.1.0 \
+docker run --rm --user 0 --entrypoint chown -v "$PWD/local:/w" safety-mcp-server:0.1.0 \
   -R 1001:1001 /w/keys-rw /w/approver-state /w/queue/results
 ```
 
@@ -111,10 +122,11 @@ docker run --rm --user 0 --entrypoint chown -v "$PWD:/w" safety-mcp-server:0.1.0
 
 ### 3. Конфиг
 
-Скопируйте [`conf.example/`](conf.example/) в `conf/`, впишите хосты и добавьте ключи хостов:
+Скопируйте [`conf.example/`](conf.example/) в `local/conf/`, впишите хосты и добавьте ключи хостов:
 
 ```bash
-ssh-keyscan -t ed25519 <адрес> >> conf/known_hosts.<стенд>   # сверьте отпечаток!
+cp conf.example/*.json local/conf/
+ssh-keyscan -t ed25519 <адрес> >> local/conf/known_hosts.<стенд>   # сверьте отпечаток!
 ```
 
 ### 4. Обёртка на хостах
@@ -122,7 +134,7 @@ ssh-keyscan -t ed25519 <адрес> >> conf/known_hosts.<стенд>   # све�
 Выполняется вашим обычным доступом к `ssh_user`. Пользователей скрипт не создаёт, системные файлы не трогает.
 
 ```bash
-MCP_SSH_CONF=$PWD/conf DEPLOY_SSH_KEY=~/.ssh/<ваш_ключ> DEPLOY_KEY_DIR=~/.ssh \
+MCP_SSH_CONF=$PWD/local/conf DEPLOY_SSH_KEY=~/.ssh/<ваш_ключ> DEPLOY_KEY_DIR=~/.ssh \
   wrapper/deploy.sh <стенд> --install-keys
 ```
 
@@ -131,7 +143,7 @@ MCP_SSH_CONF=$PWD/conf DEPLOY_SSH_KEY=~/.ssh/<ваш_ключ> DEPLOY_KEY_DIR=~/
 ### 5. FreeOTP (один раз, в своём терминале)
 
 ```bash
-docker compose run --rm approver enroll --account <имя>
+docker compose --project-directory local -f docker-compose.yml run --rm approver enroll --account <имя>
 ```
 
 Отсканируйте QR-код в FreeOTP («+», затем сканирование) и введите показанный код.
@@ -143,15 +155,15 @@ docker compose run --rm approver enroll --account <имя>
 ### 6. Запуск
 
 ```bash
-docker compose up -d approver
-wrapper/open-new-requests.sh ./queue/requests &
+docker compose --project-directory local -f docker-compose.yml up -d approver
+wrapper/open-new-requests.sh local/queue/requests &
 
 claude mcp add safety-mcp-server -- \
-  docker compose -f "$PWD/docker-compose.yml" --project-directory "$PWD" run --rm -T safety-mcp-server
+  docker compose --project-directory "$PWD/local" -f "$PWD/docker-compose.yml" run --rm -T safety-mcp-server
 ```
 
 MCP работает и **без OTP**: команды `ro` доступны, `rw` возвращают ошибку с командой настройки
-(текст задаётся переменной `MCP_ENROLL_HINT`).
+(текст задаётся переменной `MCP_ENROLL_HINT` в `local/.env`).
 
 ## Инструменты для агента
 
@@ -231,7 +243,7 @@ sequenceDiagram
 
 ## Конфигурация
 
-Каталог `conf/` (в контейнере `/etc/mcp-ssh`) монтируется **только для чтения**. Если конфиг доступен
+Каталог `local/conf/` (в контейнере `/etc/mcp-ssh`) монтируется **только для чтения**. Если конфиг доступен
 на запись, сервер не стартует (для отладки: `MCP_SSH_ALLOW_WRITABLE=1`).
 
 ### `inventory.json`
@@ -298,13 +310,13 @@ sequenceDiagram
 
 | Что | Где | Дальше |
 |---|---|---|
-| Команда для всех стендов | `commands.json` → `common.read` / `common.write` | `wrapper/deploy.sh <стенд>` для каждого стенда |
-| Команда для одного стенда | `commands.json` → `stands.<стенд>` | `wrapper/deploy.sh <стенд>` |
-| Хост | `inventory.json` → `stands.<стенд>.hosts`, ключ хоста в `known_hosts.<стенд>` | `wrapper/deploy.sh <стенд> <хост> --install-keys` |
-| Стенд | `inventory.json` → `stands`, ключи `mcp_<стенд>_ro/rw` | `wrapper/deploy.sh <стенд> --install-keys` |
+| Команда для всех стендов | `local/conf/commands.json` → `common.read` / `common.write` | `wrapper/deploy.sh <стенд>` для каждого стенда |
+| Команда для одного стенда | `local/conf/commands.json` → `stands.<стенд>` | `wrapper/deploy.sh <стенд>` |
+| Хост | `local/conf/inventory.json` → `stands.<стенд>.hosts`, ключ хоста в `known_hosts.<стенд>` | `wrapper/deploy.sh <стенд> <хост> --install-keys` |
+| Стенд | `local/conf/inventory.json` → `stands`, ключи `mcp_<стенд>_ro/rw` | `wrapper/deploy.sh <стенд> --install-keys` |
 
 После изменений переподключите MCP в клиенте (`/mcp` → reconnect). Проверка конфига:
-`docker compose run --rm safety-mcp-server check`.
+`docker compose --project-directory local -f docker-compose.yml run --rm safety-mcp-server check`.
 
 > [!CAUTION]
 > Не добавляйте команды, умеющие запускать другие: `find -exec`, `awk`, `less`, `vim`, `tar`, `git`,
@@ -329,7 +341,7 @@ sequenceDiagram
 > ```json
 > {
 >   "permissions": {
->     "deny": ["Bash(docker:*)", "Read(./keys-rw/**)", "Read(./approver-state/**)", "Edit(./conf/**)"],
+>     "deny": ["Bash(docker:*)", "Read(./local/keys-rw/**)", "Read(./local/approver-state/**)", "Edit(./local/conf/**)"],
 >     "disableBypassPermissionsMode": "disable"
 >   }
 > }
@@ -346,9 +358,9 @@ python3 -m venv .venv
 CLI администратора (без пакета `mcp`, на чистом Python):
 
 ```bash
-MCP_SSH_CONF=conf python3 server.py check
-MCP_SSH_CONF=conf python3 server.py list-hosts <стенд>
-MCP_SSH_CONF=conf python3 server.py gen-rules <стенд> <хост> ro
+MCP_SSH_CONF=local/conf python3 server.py check
+MCP_SSH_CONF=local/conf python3 server.py list-hosts <стенд>
+MCP_SSH_CONF=local/conf python3 server.py gen-rules <стенд> <хост> ro
 ```
 
 ## Структура проекта
@@ -373,6 +385,7 @@ safety-mcp-server/
 ├── conf.example/             # пример конфига
 ├── tests/                    # pytest
 ├── docs/TASK.md              # полное техническое задание
+├── local/                    # ваши данные (не в git): conf, keys-ro, keys-rw, state, queue, approver-state, .env
 ├── Dockerfile
 └── docker-compose.yml
 ```

@@ -17,7 +17,7 @@ from .queue import ID_RE, Queue
 from .sshexec import Audit, run_on_hosts
 
 APPROVE_WAIT = float(os.environ.get("MCP_APPROVE_WAIT", "90"))
-ENROLL_HINT = os.environ.get("MCP_ENROLL_HINT", "docker compose run --rm approver enroll --account <имя>")
+ENROLL_HINT = os.environ.get("MCP_ENROLL_HINT", "docker compose --project-directory local -f docker-compose.yml run --rm approver enroll --account <имя>")
 
 
 def not_enrolled_message() -> str:
