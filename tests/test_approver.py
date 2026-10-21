@@ -256,3 +256,25 @@ def test_http_index_and_escaping(web):
     st, _, body = req(port, "GET", "/")
     assert rid in body
     assert req(port, "GET", "/r/../../etc/passwd")[0] == 404
+
+
+def test_enroll_reports_clock_skew(env):
+    ap, q, _, clock = env
+    holder = {"out": io.StringIO()}
+
+    def skewed_input(prompt):
+        secret = re.search(r"secret=([A-Z2-7]+)", holder["out"].getvalue()).group(1)
+        return totp.totp(totp.decode_secret(secret), clock() + 66)
+    assert enroll(ap, "x", False, input_fn=skewed_input, out=holder["out"]) == 5
+    out = holder["out"].getvalue()
+    assert "Время этой машины (UTC)" in out and "спешит" in out and "60 с" in out
+    assert not ap.enrolled()
+
+
+def test_approve_reports_clock_skew(env):
+    ap, q, runner, clock = env
+    key, _ = do_enroll(ap, clock)
+    clock.t += 30
+    rid = new_req(q, clock)
+    ok, msg = ap.approve(rid, totp.totp(key, clock() - 120), ap.view(rid)["csrf"])
+    assert not ok and "отстаёт" in msg and "осталось попыток: 2" in msg and not runner.calls

@@ -69,6 +69,7 @@ services:
       MCP_QUEUE_DIR: /queue
       APPROVER_DATA: /data
       APPROVER_ACCOUNT: "${APPROVER_ACCOUNT:-operator}"
+      APPROVER_TOTP_SKEW: "${APPROVER_TOTP_SKEW:-50}"       # допустимое расхождение часов телефона и машины, с (0..120)
     ports:
       - "127.0.0.1:8765:8765"              # страница доступна только с этой машины
     volumes:

@@ -23,6 +23,10 @@ from .queue import ID_RE, REQUEST_TTL, Queue, atomic_write_json, read_json
 from .sshexec import Audit, run_one
 
 MAX_ATTEMPTS = 3
+# Допустимое расхождение часов телефона и этой машины, секунды (0..120)
+TOTP_SKEW = int(os.environ.get("APPROVER_TOTP_SKEW", "50"))
+if not 0 <= TOTP_SKEW <= 120:
+    raise SystemExit("APPROVER_TOTP_SKEW должен быть от 0 до 120 секунд")
 GLOBAL_FAILS = 5
 GLOBAL_WINDOW = 600
 FINAL = {"approved-ok", "approved-failed", "denied", "expired", "invalid"}
@@ -59,7 +63,8 @@ class Approver:
             o = self.otp()
             if not o:
                 return False
-            step = totp.verify(totp.decode_secret(o["secret"]), code, self.clock(), o.get("last_step", -1))
+            step = totp.verify(totp.decode_secret(o["secret"]), code, self.clock(), o.get("last_step", -1),
+                               skew=TOTP_SKEW)
             if step is None:
                 return False
             o["last_step"] = step
@@ -188,17 +193,20 @@ class Approver:
             lu = self.locked_until()
             if lu:
                 return False, f"слишком много неверных кодов, подтверждение заблокировано до {time.strftime('%H:%M:%S', time.localtime(lu))}"
-            step = totp.verify(totp.decode_secret(o["secret"]), str(code or "").strip(), self.clock(),
-                               o.get("last_step", -1))
+            key = totp.decode_secret(o["secret"])
+            code = str(code or "").strip()
+            step = totp.verify(key, code, self.clock(), o.get("last_step", -1), skew=TOTP_SKEW)
             if step is None:
                 st["attempts"] += 1
                 atomic_write_json(self._state_path(rid), st, mode=0o600)
                 self._add_fail()
                 left = MAX_ATTEMPTS - st["attempts"]
+                d = totp.drift(key, code, self.clock())
+                hint = (" " + totp.drift_hint(d)) if d is not None and abs(d) > TOTP_SKEW else ""
                 if left <= 0:
                     self._finish(req, "denied", reason="3 неверных кода")
-                    return False, "неверный код; попытки исчерпаны, заявка отклонена"
-                return False, f"неверный или уже использованный код; осталось попыток: {left}"
+                    return False, "неверный код; попытки исчерпаны, заявка отклонена." + hint
+                return False, f"неверный или уже использованный код; осталось попыток: {left}." + hint
             o["last_step"] = step
             atomic_write_json(self._otp_path(), o, mode=0o600)
             self.audit.write(type="approval", id=rid, stand=stand.name, host=host.name, status="approved",
@@ -409,13 +417,20 @@ def enroll(approver: Approver, account: str, reset: bool, input_fn=input, out=sy
         print("(segno не установлен, используйте ссылку ниже)", file=out)
     print(f"\nЕсли QR не читается, добавьте вручную: {uri}\n", file=out)
     key = totp.decode_secret(secret)
+    print(f"Время этой машины (UTC): {time.strftime('%H:%M:%S', time.gmtime(approver.clock()))}. "
+          f"Часы телефона и машины должны совпадать с точностью до {TOTP_SKEW} с.\n", file=out)
     for _ in range(MAX_ATTEMPTS):
-        step = totp.verify(key, input_fn("Введите код из FreeOTP для проверки: ").strip(), approver.clock(), -1)
+        code = input_fn("Введите код из FreeOTP для проверки: ").strip()
+        step = totp.verify(key, code, approver.clock(), -1, skew=TOTP_SKEW)
         if step is not None:
             approver.save_otp(secret, account, step)
             print("Готово: OTP настроен.", file=out)
             return 0
-        print("Неверный код.", file=out)
+        d = totp.drift(key, code, approver.clock())
+        if d is not None:
+            print("Неверный код. " + totp.drift_hint(d), file=out)
+        else:
+            print("Неверный код.", file=out)
     print("Настройка не сохранена.", file=out)
     return 5
 

@@ -30,3 +30,24 @@ def test_secret_roundtrip_and_uri():
     uri = totp.otpauth_uri(s, "operator")
     assert uri.startswith("otpauth://totp/safety-mcp-server%3Aoperator?")
     assert f"secret={s}" in uri and "digits=6" in uri and "period=30" in uri and "algorithm=SHA1" in uri
+
+
+def test_drift_detects_clock_skew_but_never_accepts():
+    now = 1_000_000
+    early = totp.totp(RFC_KEY, now + 66)        # телефон спешит на 66 с
+    assert totp.verify(RFC_KEY, early, now) is None
+    assert totp.drift(RFC_KEY, early, now) == 60
+    late = totp.totp(RFC_KEY, now - 300)
+    assert totp.drift(RFC_KEY, late, now) == -300
+    assert totp.drift(RFC_KEY, totp.totp(RFC_KEY, now + 3600), now) is None
+    assert "спешит" in totp.drift_hint(60) and "отстаёт" in totp.drift_hint(-90)
+    assert totp.drift(RFC_KEY, "abc", now) is None
+
+
+def test_skew_seconds():
+    now = 1_000_005  # 5 с от начала шага
+    for d in (-50, -31, 0, 31, 45, 50):
+        assert totp.verify(RFC_KEY, totp.totp(RFC_KEY, now + d), now, skew=50) is not None, d
+    for d in (-95, 85, 120):
+        assert totp.verify(RFC_KEY, totp.totp(RFC_KEY, now + d), now, skew=50) is None, d
+    assert totp.verify(RFC_KEY, totp.totp(RFC_KEY, now + 40), now, skew=0) is None

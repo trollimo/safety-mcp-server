@@ -34,19 +34,46 @@ def totp(key: bytes, at: float | None = None, digits: int = DIGITS) -> str:
     return hotp(key, int(at // STEP), digits)
 
 
-def verify(key: bytes, code: str, now: float | None = None, last_step: int = -1, window: int = 1) -> int | None:
-    """Возвращает номер шага, если код верен и ещё не использован (шаг > last_step), иначе None."""
+def verify(key: bytes, code: str, now: float | None = None, last_step: int = -1, window: int = 1,
+           skew: float | None = None) -> int | None:
+    """Возвращает номер шага, если код верен и ещё не использован (шаг > last_step), иначе None.
+
+    skew (секунды): принимать коды шагов, пересекающихся с интервалом [now-skew, now+skew].
+    Если skew не задан, используется window (в шагах)."""
     if not isinstance(code, str) or len(code) != DIGITS or not code.isdigit():
         return None
     now = time.time() if now is None else now
-    cur = int(now // STEP)
+    if skew is not None:
+        lo, hi = int((now - skew) // STEP), int((now + skew) // STEP)
+    else:
+        cur = int(now // STEP)
+        lo, hi = cur - window, cur + window
     found = None
-    for step in range(cur - window, cur + window + 1):
+    for step in range(lo, hi + 1):
         if hmac.compare_digest(hotp(key, step), code):
             found = step
     if found is None or found <= last_step:
         return None
     return found
+
+
+def drift(key: bytes, code: str, now: float | None = None, search: int = 20) -> int | None:
+    """Только для диагностики: если код верен для времени в пределах ±search шагов, вернуть сдвиг в секундах
+    (положительный — телефон спешит относительно этой машины). Код при этом НЕ принимается."""
+    if not isinstance(code, str) or len(code) != DIGITS or not code.isdigit():
+        return None
+    now = time.time() if now is None else now
+    cur = int(now // STEP)
+    for d in sorted(range(-search, search + 1), key=abs):
+        if hmac.compare_digest(hotp(key, cur + d), code):
+            return d * STEP
+    return None
+
+
+def drift_hint(seconds: int) -> str:
+    side = "спешит" if seconds > 0 else "отстаёт"
+    return (f"Код похож на верный, но телефон {side} относительно этой машины примерно на {abs(seconds)} с. "
+            "Синхронизируйте часы (NTP) на машине с approver.")
 
 
 def otpauth_uri(secret_b32: str, account: str, issuer: str = "safety-mcp-server") -> str:
