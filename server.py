@@ -47,8 +47,7 @@ def cli(argv: list[str]) -> int:
 
 
 def serve() -> int:
-    from mcp.server.fastmcp import FastMCP
-
+    from safety_mcp.mcpserver import StrictFastMCP
     from safety_mcp.queue import Queue
     from safety_mcp.sshexec import Audit
     from safety_mcp.tools import about_text, build_tools
@@ -61,7 +60,7 @@ def serve() -> int:
     queue = Queue(queue_dir())
     audit = Audit(os.path.join(state_dir(), "audit.log"))
     # instructions клиент передаёт агенту при подключении: правила работы видны без вызова about
-    mcp = FastMCP(SERVER_NAME, instructions=about_text(cfg))
+    mcp = StrictFastMCP(SERVER_NAME, instructions=about_text(cfg))
     for spec in build_tools(cfg, queue, audit, os.environ.get("APPROVER_URL", "http://127.0.0.1:8765")):
         mcp.add_tool(spec.fn, name=spec.name, description=spec.description)
     print(f"{SERVER_NAME} {__version__}: готов", file=sys.stderr)

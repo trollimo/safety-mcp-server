@@ -250,3 +250,18 @@ def test_dry_run_in_schema_and_about(cfg, queue):
         assert "dry_run" not in listed[n].inputSchema.get("required", [])
     assert "dry_run" not in listed["about"].inputSchema.get("properties", {})
     assert "ПРОБНЫЙ ЗАПУСК" in tools(cfg, queue)["about"].fn()
+
+
+def test_unknown_params_rejected_not_ignored(cfg, queue, fake):
+    from mcp.server.fastmcp.exceptions import ToolError
+    from safety_mcp.mcpserver import StrictFastMCP
+    m = StrictFastMCP("t")
+    for s in build_tools(cfg, queue, Audit(None), "http://x"):
+        m.add_tool(s.fn, name=s.name, description=s.description)
+    with pytest.raises(ToolError, match="неизвестные параметры \\['path'\\]"):
+        asyncio.run(m.call_tool("dev_ro_disk_free_opt", {"path": "; ls -la"}))
+    with pytest.raises(ToolError, match="неизвестные параметры"):
+        asyncio.run(m.call_tool("about", {"x": "1"}))
+    assert not fake.calls
+    res = asyncio.run(m.call_tool("dev_ro_disk_free_opt", {"dry_run": True}))
+    assert "ПРОБНЫЙ ЗАПУСК" in str(res)
