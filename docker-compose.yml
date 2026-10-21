@@ -21,7 +21,7 @@ services:
         MCP_GID: "${MCP_GID:-1000}"
         APPROVER_UID: "${APPROVER_UID:-1001}"
         APPROVER_GID: "${APPROVER_GID:-1001}"
-    image: safety-mcp-server:0.1.0
+    image: safety-mcp-server:0.2.0
     user: mcp
     restart: unless-stopped
     tmpfs:
@@ -77,7 +77,7 @@ services:
 
   approver:
     <<: *hardening
-    image: safety-mcp-server:0.1.0
+    image: safety-mcp-server:0.2.0
     user: approver
     restart: unless-stopped
     tmpfs:

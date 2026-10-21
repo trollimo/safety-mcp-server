@@ -12,7 +12,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 DIR="$HERE/local"
 STANDS=()
 CHOWN=1
-IMAGE="${IMAGE:-safety-mcp-server:0.1.0}"
+IMAGE="${IMAGE:-safety-mcp-server:0.2.0}"
 
 usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ $# -gt 0 ]; do

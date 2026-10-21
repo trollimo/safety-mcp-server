@@ -1,7 +1,7 @@
 ﻿# Общие функции для скриптов windows\*.ps1 (подключается через dot-source).
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-if (-not $Image) { $Image = 'safety-mcp-server:0.1.0' }
+if (-not $Image) { $Image = 'safety-mcp-server:0.2.0' }
 if (-not $Dir) { $Dir = Join-Path $Root 'local' }
 $Dir = [IO.Path]::GetFullPath($Dir)
 

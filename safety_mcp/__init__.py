@@ -1,7 +1,7 @@
 """safety-mcp-server: безопасный MCP-доступ к стендам по SSH."""
 import os
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 SERVER_NAME = "safety-mcp-server"
 
 

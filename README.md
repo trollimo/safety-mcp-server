@@ -102,7 +102,7 @@ alias dc='docker compose --project-directory local -f docker-compose.yml'   # д
 
 ```bash
 docker compose build
-# или без интернета: docker load < dist/safety-mcp-server-0.1.0.tar.gz
+# или без интернета: docker load < dist/safety-mcp-server-0.2.0-<коммит>.tar.gz
 ```
 
 ### 2. Ключи и каталоги
@@ -134,7 +134,7 @@ chmod 700 local/keys-ro local/keys-rw && chmod 600 local/keys-ro/safety_*_ro loc
 (umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32), end="")' > local/mcp-token)
 
 # каталоги approver принадлежат APPROVER_UID (1001), остальные — MCP_UID (1000)
-docker run --rm --user 0 --entrypoint chown -v "$PWD/local:/w" safety-mcp-server:0.1.0 \
+docker run --rm --user 0 --entrypoint chown -v "$PWD/local:/w" safety-mcp-server:0.2.0 \
   -R 1001:1001 /w/keys-rw /w/approver-state /w/queue/results
 ```
 
