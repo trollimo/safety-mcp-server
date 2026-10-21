@@ -63,7 +63,16 @@ for f in "$HERE"/conf.example/*; do
 done
 if [ -e "$DIR/.env" ]; then note_old ".env"; else cp "$HERE/.env.example" "$DIR/.env"; note_new ".env"; fi
 
-# 3. ключи
+# 3. токен MCP (Bearer для клиента, например opencode)
+umask 077
+if [ -e "$DIR/mcp-token" ]; then
+  note_old "mcp-token"
+else
+  python3 -c 'import secrets; print(secrets.token_urlsafe(32), end="")' > "$DIR/mcp-token"
+  note_new "mcp-token (Bearer-токен для клиента MCP)"
+fi
+
+# 4. ключи
 umask 077
 mkdir -p "$HOME/.ssh"
 for s in "${STANDS[@]}"; do
@@ -92,7 +101,7 @@ for s in "${STANDS[@]}"; do
   fi
 done
 
-# 4. владелец каталогов approver
+# 5. владелец каталогов approver
 if [ "$CHOWN" = 1 ]; then
   as_root "$IMAGE" -c "chown -R $APPROVER_UID:$APPROVER_GID /w/keys-rw /w/approver-state /w/queue/results \
     && chmod 700 /w/keys-rw && chmod 755 /w/queue/results /w/approver-state"
@@ -111,5 +120,7 @@ cat <<EOF
   2. Ключи хостов: ssh-keyscan -t ed25519 <адрес> >> $DIR/conf/known_hosts.<стенд>  (сверьте отпечаток!)
   3. Обёртка на хостах: MCP_SSH_CONF=$DIR/conf DEPLOY_SSH_KEY=~/.ssh/<ваш_ключ> DEPLOY_KEY_DIR=~/.ssh \\
        wrapper/deploy.sh <стенд> --install-keys
-  4. FreeOTP (в своём терминале): docker compose --project-directory $DIR -f $HERE/docker-compose.yml run --rm approver enroll --account <имя>
+  4. Запуск: docker compose --project-directory $DIR -f $HERE/docker-compose.yml up -d
+     MCP: http://127.0.0.1:8766/mcp, заголовок Authorization: Bearer <содержимое $DIR/mcp-token>
+  5. FreeOTP (в своём терминале): docker compose --project-directory $DIR -f $HERE/docker-compose.yml run --rm approver enroll --account <имя>
 EOF

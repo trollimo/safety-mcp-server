@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MCP-сервер (без аргументов) и CLI для администратора.
 
-  python server.py                         запустить MCP-сервер (stdio)
+  python server.py                         запустить MCP-сервер (HTTP, MCP_TRANSPORT=stdio — stdio)
   python server.py check                   проверить конфиг
   python server.py list-hosts <stand>      "имя адрес" по строкам
   python server.py ssh-user <stand>
@@ -57,14 +57,32 @@ def serve() -> int:
     except ConfigError as e:
         print(f"{SERVER_NAME}: ошибка конфигурации: {e}", file=sys.stderr)
         return 2
+    transport = os.environ.get("MCP_TRANSPORT", "http")
+    if transport not in ("http", "stdio"):
+        print(f"{SERVER_NAME}: MCP_TRANSPORT должен быть http или stdio", file=sys.stderr)
+        return 2
+    if transport == "http":
+        from safety_mcp import httpserver
+        try:
+            token = httpserver.load_token()
+        except httpserver.TokenError as e:
+            print(f"{SERVER_NAME}: {e}", file=sys.stderr)
+            return 2
     queue = Queue(queue_dir())
     audit = Audit(os.path.join(state_dir(), "audit.log"))
     # instructions клиент передаёт агенту при подключении: правила работы видны без вызова about
-    mcp = StrictFastMCP(SERVER_NAME, instructions=about_text(cfg))
+    kw = {"transport_security": httpserver.security_settings()} if transport == "http" else {}
+    mcp = StrictFastMCP(SERVER_NAME, instructions=about_text(cfg), **kw)
     for spec in build_tools(cfg, queue, audit, os.environ.get("APPROVER_URL", "http://127.0.0.1:8765")):
         mcp.add_tool(spec.fn, name=spec.name, description=spec.description)
-    print(f"{SERVER_NAME} {__version__}: готов", file=sys.stderr)
-    mcp.run()
+    if transport == "stdio":
+        print(f"{SERVER_NAME} {__version__}: готов (stdio)", file=sys.stderr)
+        mcp.run()
+        return 0
+    host = os.environ.get("MCP_HTTP_BIND", "127.0.0.1")
+    port = int(os.environ.get("MCP_HTTP_LISTEN_PORT", httpserver.DEFAULT_PORT))
+    print(f"{SERVER_NAME} {__version__}: готов, http://{host}:{port}{httpserver.PATH}", file=sys.stderr)
+    httpserver.run(mcp, token, host, port)
     return 0
 
 

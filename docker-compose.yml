@@ -22,13 +22,20 @@ services:
         APPROVER_UID: "${APPROVER_UID:-1001}"
         APPROVER_GID: "${APPROVER_GID:-1001}"
     image: safety-mcp-server:0.1.0
-    stdin_open: true            # MCP работает по stdio
     user: mcp
+    restart: unless-stopped
     environment:
+      MCP_TRANSPORT: http
+      MCP_HTTP_BIND: 0.0.0.0                  # внутри контейнера; снаружи порт открыт только на 127.0.0.1
+      MCP_HTTP_LISTEN_PORT: "8766"
+      MCP_HTTP_TOKEN_FILE: /run/mcp-token
+      MCP_HTTP_ALLOWED_HOSTS: "127.0.0.1:${MCP_HTTP_PORT:-8766},localhost:${MCP_HTTP_PORT:-8766}"
       MCP_STATE_DIR: /state
       MCP_QUEUE_DIR: /queue
       APPROVER_URL: http://127.0.0.1:8765
       MCP_ENROLL_HINT: "${MCP_ENROLL_HINT:-docker compose --project-directory local -f docker-compose.yml run --rm approver enroll --account <имя>}"
+    ports:
+      - "127.0.0.1:${MCP_HTTP_PORT:-8766}:8766"   # MCP для агента: http://127.0.0.1:8766/mcp
     volumes:
       - type: bind                 # inventory.json, commands.json, known_hosts.*
         source: ./conf
@@ -36,6 +43,12 @@ services:
         read_only: true
         bind:
           create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
+      - type: bind                 # Bearer-токен для клиента MCP (создаёт init-local.sh)
+        source: ./mcp-token
+        target: /run/mcp-token
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind                 # ТОЛЬКО ro-ключи
         source: ./keys-ro
         target: /keys
@@ -63,6 +76,7 @@ services:
     <<: *hardening
     image: safety-mcp-server:0.1.0
     user: approver
+    restart: unless-stopped
     entrypoint: ["python", "/app/approver.py"]
     command: ["serve", "--bind", "0.0.0.0", "--port", "8765"]
     environment:

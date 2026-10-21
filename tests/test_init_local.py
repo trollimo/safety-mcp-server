@@ -62,3 +62,12 @@ def test_bad_stand_name(tmp_path, bad):
 
 def test_unknown_option(tmp_path):
     assert run(tmp_path, "--wat").returncode == 1
+
+
+def test_mcp_token_created_once(tmp_path):
+    assert run(tmp_path).returncode == 0
+    tok = tmp_path / "data" / "mcp-token"
+    first = tok.read_text()
+    assert len(first) >= 32 and "\n" not in first and mode(tok) == 0o600
+    assert run(tmp_path).returncode == 0
+    assert tok.read_text() == first

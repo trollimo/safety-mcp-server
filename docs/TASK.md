@@ -846,3 +846,9 @@ Approver слушает `0.0.0.0:8765` внутри контейнера, на �
   Каждый хост проверяется по инвентарю стенда в MCP и повторно в approver.
 - **Описание параметров**: `params.<имя>` — строка-шаблон или `{"pattern", "description"}`; описание и шаблон
   попадают в JSON-схему параметра.
+- **Транспорт MCP — HTTP (streamable-http)** вместо stdio (п. 14.5 устарел): сервис `safety-mcp-server`
+  работает постоянно (`restart: unless-stopped`), слушает `http://127.0.0.1:8766/mcp` (порт на хосте —
+  `MCP_HTTP_PORT`). Каждый запрос требует `Authorization: Bearer <токен>`; токен (≥32 символов) читается из
+  `local/mcp-token` (монтируется в `/run/mcp-token`, создаёт `init-local.sh`), без него сервер не стартует.
+  `Host`/`Origin` проверяются (DNS-rebinding). Клиент — opencode `"type": "remote"`. Режим stdio остаётся
+  для отладки: `MCP_TRANSPORT=stdio`.

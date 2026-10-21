@@ -6,7 +6,7 @@
 изменения — только с одноразовым кодом от человека.**
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
-![MCP](https://img.shields.io/badge/MCP-stdio-6E56CF)
+![MCP](https://img.shields.io/badge/MCP-streamable--http-6E56CF)
 ![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)
 ![Offline](https://img.shields.io/badge/internet-not%20required-success)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
@@ -57,7 +57,7 @@
 
 ```mermaid
 flowchart LR
-    A[ИИ-агент] -- "&lt;стенд&gt;_ro_*" --> M[MCP-сервер<br/>ключ ro]
+    A[ИИ-агент] -- "&lt;стенд&gt;_ro_* (HTTP + токен)" --> M[MCP-сервер<br/>127.0.0.1:8766<br/>ключ ro]
     A -- "&lt;стенд&gt;_rw_*" --> M
     M -- "ssh, ключ ro" --> W
     M -- "заявка" --> Q[(queue/requests)]
@@ -70,7 +70,7 @@ flowchart LR
 
 | Компонент | Где работает | Что делает |
 |---|---|---|
-| `server.py` | контейнер `safety-mcp-server` | MCP-сервер (stdio) и CLI администратора |
+| `server.py` | контейнер `safety-mcp-server` | MCP-сервер на `127.0.0.1:8766/mcp` (Bearer-токен) и CLI администратора |
 | `approver.py` | контейнер `approver` | Страница подтверждения на `127.0.0.1:8765`, проверка TOTP, выполнение rw |
 | `wrapper/mcp-wrapper` | `~/.mcp-ssh/` на каждом хосте | Принудительная команда для ключей MCP: пропускает только команды из правил |
 | `wrapper/deploy.sh` | машина администратора | Генерирует правила и раскладывает обёртку на хосты |
@@ -106,7 +106,8 @@ docker compose build
 
 ### 2. Ключи и каталоги
 
-Проще всего скриптом: он создаёт `local/` из `conf.example/` и `.env.example`, генерирует ключи и ставит права.
+Проще всего скриптом: он создаёт `local/` из `conf.example/` и `.env.example`, генерирует ключи, токен MCP
+(`local/mcp-token`) и ставит права.
 Существующие файлы, ключи и секрет OTP он никогда не перезаписывает, поэтому запускать его можно повторно,
 например чтобы добавить ключи нового стенда.
 
@@ -125,6 +126,7 @@ mkdir -p local/{conf,keys-ro,keys-rw,state,queue/requests,queue/results,approver
 cp ~/.ssh/mcp_<стенд>_ro* local/keys-ro/
 mv ~/.ssh/mcp_<стенд>_rw local/keys-rw/ && cp ~/.ssh/mcp_<стенд>_rw.pub local/keys-rw/
 chmod 700 local/keys-ro local/keys-rw && chmod 600 local/keys-ro/mcp_*_ro local/keys-rw/mcp_*_rw
+(umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32), end="")' > local/mcp-token)
 
 # каталоги approver принадлежат APPROVER_UID (1001), остальные — MCP_UID (1000)
 docker run --rm --user 0 --entrypoint chown -v "$PWD/local:/w" safety-mcp-server:0.1.0 \
@@ -175,12 +177,61 @@ docker compose --project-directory local -f docker-compose.yml run --rm approver
 ### 6. Запуск
 
 ```bash
-docker compose --project-directory local -f docker-compose.yml up -d approver
-wrapper/open-new-requests.sh local/queue/requests &
-
-claude mcp add safety-mcp-server -- \
-  docker compose --project-directory "$PWD/local" -f "$PWD/docker-compose.yml" run --rm -T safety-mcp-server
+docker compose --project-directory local -f docker-compose.yml up -d     # MCP-сервер и approver
+wrapper/open-new-requests.sh local/queue/requests &                       # автооткрытие страницы подтверждения
 ```
+
+Оба сервиса работают в фоне и перезапускаются вместе с Docker. Порты открыты только на `127.0.0.1`:
+
+| Адрес | Сервис | Кто подключается |
+|---|---|---|
+| `http://127.0.0.1:8766/mcp` | MCP-сервер | агент (клиент MCP) с заголовком `Authorization: Bearer <токен>` |
+| `http://127.0.0.1:8765` | страница подтверждения | только человек в браузере |
+
+Порт MCP меняется переменной `MCP_HTTP_PORT` в `local/.env`.
+
+### 7. Подключение агента
+
+**Токен** лежит в файле `local/mcp-token`. Его создаёт `init-local.sh` (`./init-local.sh` без параметров
+создаст токен, если его нет, и не тронет остальное). Без токена MCP-сервер не запускается; запрос
+без токена или с неверным токеном получает `401`.
+
+opencode (`opencode.json` в проекте или `~/.config/opencode/opencode.json`), путь к токену абсолютный:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "safety-mcp-server": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8766/mcp",
+      "headers": { "Authorization": "Bearer {file:/path/to/safety-mcp-server/local/mcp-token}" },
+      "oauth": false,
+      "enabled": true
+    }
+  }
+}
+```
+
+Проверка: `opencode mcp list` должен показать `✓ safety-mcp-server connected`.
+
+<details>
+<summary>Claude Code</summary>
+
+```bash
+claude mcp add --transport http safety-mcp-server http://127.0.0.1:8766/mcp \
+  --header "Authorization: Bearer $(cat local/mcp-token)"
+```
+
+</details>
+
+Новый токен: остановите сервер, удалите `local/mcp-token`, запустите `./init-local.sh` и
+`docker compose ... up -d`, обновите токен у клиентов.
+
+> [!WARNING]
+> Не публикуйте порт 8766 на `0.0.0.0`: кто знает токен, тот выполняет ro-команды и создаёт заявки.
+> Если агент работает на другой машине, подключайтесь через SSH-туннель:
+> `ssh -N -L 8766:127.0.0.1:8766 <машина с MCP>`. TLS сервер не делает.
 
 MCP работает и **без OTP**: команды `ro` доступны, `rw` возвращают ошибку с командой настройки
 (текст задаётся переменной `MCP_ENROLL_HINT` в `local/.env`).
@@ -398,10 +449,12 @@ HTTP-команда (только в блоке `read`):
 | Перепутан стенд | Стенд в имени инструмента, в описании и в первой строке каждого ответа |
 | Подмена хоста | `StrictHostKeyChecking=yes`, свой `known_hosts` на каждый стенд; хост принимается только из инвентаря своего стенда — и в MCP, и повторно в approver |
 | HTTP как прокси к чужим адресам (SSRF) | URL только из инвентаря, итоговый хост сверяется с эндпоинтом, редиректы не выполняются, ответ ограничен 200 КБ, `Set-Cookie` и `Authorization` скрываются |
+| Чужой клиент подключается к MCP | Порт только на `127.0.0.1`, обязательный Bearer-токен (сравнение за постоянное время), проверка `Host` и `Origin` (DNS-rebinding) |
 | Страница одобрения из браузера злоумышленника | Только `127.0.0.1`, проверка `Host` и `Origin`, CSRF, CSP, `no-store` |
 
 > [!IMPORTANT]
-> Всё это работает, только если у агента нет доступа к approver. Запретите в `settings.json` Claude Code:
+> Всё это работает, только если у агента нет доступа к approver и Docker. Токен MCP не даёт права на запись:
+> запись по-прежнему требует кода от человека. Запретите в `settings.json` Claude Code (в opencode — аналогично через `permission`):
 >
 > ```json
 > {
@@ -442,6 +495,7 @@ safety-mcp-server/
 │   ├── sshexec.py            # ssh, параллельность, аудит
 │   ├── httpcheck.py          # HTTP-проверки (стандартная библиотека)
 │   ├── mcpserver.py          # FastMCP с отказом на лишние параметры
+│   ├── httpserver.py         # HTTP-транспорт: Bearer-токен, Host/Origin
 │   ├── queue.py              # очередь заявок и кодов
 │   ├── approver.py           # страница подтверждения, TOTP, enroll
 │   ├── rules.py              # генерация rules.ro / rules.rw
@@ -453,7 +507,7 @@ safety-mcp-server/
 ├── conf.example/             # пример конфига
 ├── tests/                    # pytest
 ├── docs/TASK.md              # полное техническое задание
-├── local/                    # ваши данные (не в git): conf, keys-ro, keys-rw, state, queue, approver-state, .env
+├── local/                    # ваши данные (не в git): conf, keys-ro, keys-rw, state, queue, approver-state, mcp-token, .env
 ├── Dockerfile
 └── docker-compose.yml
 ```
