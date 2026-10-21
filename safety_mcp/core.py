@@ -66,7 +66,7 @@ def command_regex(cmd: Command) -> str:
 def matches_write_rule(cfg: Config, stand: Stand, host: Host, cmd_text: str) -> Command | None:
     """Повторная проверка заявки на стороне approver: команда должна совпадать с write-командой стенда."""
     for c in cfg.commands_for(stand.name):
-        if c.kind != "write" or not set(c.tags) <= set(host.tags):
+        if c.kind != "write" or c.type != "ssh" or not set(c.tags) <= set(host.tags):
             continue
         if re.fullmatch(command_regex(c), cmd_text):
             return c

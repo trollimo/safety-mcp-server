@@ -13,6 +13,7 @@ from typing import Callable
 
 from .config import Command, Config, Stand
 from .core import ToolError, build_command, command_regex, select_hosts
+from .httpcheck import dry_run_http, run_http
 from .queue import ID_RE, Queue
 from .sshexec import Audit, run_on_hosts
 
@@ -41,6 +42,9 @@ def _with_signature(fn, params: list[tuple[str, bool]]):
         if name == "dry_run":
             sig_params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=False, annotation=bool))
             ann[name] = bool
+        elif name == "mode":
+            sig_params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default="short", annotation=str))
+            ann[name] = str
         elif required:
             sig_params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, annotation=str))
             ann[name] = str
@@ -77,16 +81,24 @@ def about_text(cfg: Config) -> str:
         rw = "нет"
         if "rw" in s.keys:
             rw = "да, код можно передать через агента (rw_approve)" if s.agent_otp else "да, только через страницу"
-        stands.append(f"- {s.name}: хостов {len(s.hosts)}; запись: {rw}")
+        http = f"; HTTP-эндпоинтов {len(s.endpoints)}" if s.endpoints else ""
+        stands.append(f"- {s.name}: хостов {len(s.hosts)}{http}; запись: {rw}")
     return f"""safety-mcp-server: доступ к стендам только через заранее описанные команды.
 
 ИМЕНА ИНСТРУМЕНТОВ
 - <стенд>_ro_<команда> — ЧТЕНИЕ. Выполняется сразу на хостах стенда, ничего не меняет.
 - <стенд>_rw_<команда> — ИЗМЕНЕНИЕ. НЕ выполняется сразу: создаёт заявку, её подтверждает человек.
 - <стенд>_ro_hosts_list — хосты стенда и их теги (параметр tag необязателен).
+- <стенд>_ro_endpoints_list, global_ro_endpoints_list — HTTP-эндпоинты стенда / вне стендов.
+- global_ro_<команда> — HTTP-проверки, не привязанные к стенду.
 - stands_list, about, rw_approve, rw_result — общие инструменты.
 Стенд зашит в имя инструмента: выбирайте инструмент нужного стенда и не путайте стенды.
 Произвольные команды выполнить нельзя. Если подходящей команды нет, скажите об этом человеку.
+
+HTTP-ПРОВЕРКИ
+Это тоже ЧТЕНИЕ (только GET/HEAD к адресам из конфига; свой URL указать нельзя). Параметр mode:
+short (по умолчанию) — PASS/FAIL, код ответа и время; all — полный ответ: заголовки и тело (до 20000 символов).
+Редиректы не выполняются: при 3xx показывается Location.
 
 ПРОБНЫЙ ЗАПУСК
 У каждой команды есть параметр dry_run (по умолчанию false). С dry_run=true инструмент только показывает,
@@ -182,6 +194,46 @@ def _write_tool(cfg: Config, stand: Stand, cmd: Command, queue: Queue, approver_
     return ToolSpec(tool_name(stand.name, "rw", cmd.name), desc, fn)
 
 
+def _http_tool(scope_name: str, ep, cmd: Command, audit: Audit) -> ToolSpec:
+    scope = "scope=global" if scope_name == "global" else f"stand={scope_name}"
+
+    def run(**kw):
+        mode = kw.pop("mode", None) or "short"
+        dry = kw.pop("dry_run", False)
+        if mode not in ("short", "all"):
+            raise ToolError("mode должен быть short (только результат и код) или all (полный ответ)")
+        if dry:
+            return dry_run_http(scope, ep, cmd, kw, mode)
+        return run_http(scope, ep, cmd, kw, mode, audit)
+
+    exp = cmd.expect
+    checks = []
+    if "status" in exp:
+        checks.append(f"код ответа в {exp['status']}")
+    if "body_contains" in exp:
+        checks.append(f"тело содержит {exp['body_contains']!r}")
+    if "max_ms" in exp:
+        checks.append(f"время не больше {exp['max_ms']} мс")
+    label = "[ВНЕ СТЕНДОВ] " if scope_name == "global" else _prefix(scope_name)
+    tls = " (без проверки TLS-сертификата)" if ep.scheme == "https" and not ep.tls_verify else ""
+    desc = (f"{label}{cmd.description or cmd.name}. ЧТЕНИЕ, HTTP-проверка: {cmd.method} {ep.base_url}{cmd.path}{tls}. "
+            f"Проверки: {', '.join(checks) or 'любой ответ'}. mode=short (по умолчанию): результат, код и время; "
+            f"mode=all: полный ответ (заголовки и тело). dry_run=true: показать запрос, не отправляя.")
+    if cmd.params:
+        desc += " Параметры: " + ", ".join(f"{p} (шаблон {rx})" for p, rx in cmd.params.items()) + "."
+    fn = _with_signature(_safe(run), [(p, True) for p in cmd.params] + [("mode", False), ("dry_run", False)])
+    return ToolSpec(tool_name(scope_name, "ro", cmd.name), desc, fn)
+
+
+def _endpoints_tool(scope_name: str, endpoints: dict) -> ToolSpec:
+    def endpoints_list():
+        head = "[scope=global]" if scope_name == "global" else f"[stand={scope_name}]"
+        return head + "\n" + "\n".join(f"{e.name}\t{e.base_url}" for e in sorted(endpoints.values(), key=lambda e: e.name))
+    label = "[ВНЕ СТЕНДОВ] " if scope_name == "global" else _prefix(scope_name)
+    return ToolSpec(tool_name(scope_name, "ro", "endpoints_list"), f"{label}HTTP-эндпоинты (имя и адрес). ЧТЕНИЕ.",
+                    _with_signature(endpoints_list, []))
+
+
 def _hosts_tool(stand: Stand) -> ToolSpec:
     def hosts_list(**kw):
         tag = kw.get("tag")
@@ -272,12 +324,22 @@ def build_tools(cfg: Config, queue: Queue, audit: Audit, approver_url: str,
                           _with_signature(rw_approve, [("id", True), ("code", True)])))
 
     for stand in sorted(cfg.stands.values(), key=lambda s: s.name):
-        if not stand.hosts:
-            continue
-        specs.append(_hosts_tool(stand))
+        if stand.hosts:
+            specs.append(_hosts_tool(stand))
+        if stand.endpoints:
+            specs.append(_endpoints_tool(stand.name, stand.endpoints))
         for cmd in cfg.commands_for(stand.name):
-            if cmd.kind == "read":
+            if cmd.type == "http":
+                if cmd.endpoint in stand.endpoints:
+                    specs.append(_http_tool(stand.name, stand.endpoints[cmd.endpoint], cmd, audit))
+            elif not stand.hosts:
+                continue
+            elif cmd.kind == "read":
                 specs.append(_read_tool(cfg, stand, cmd, audit))
             elif "rw" in stand.keys:
                 specs.append(_write_tool(cfg, stand, cmd, queue, approver_url))
+    if cfg.global_endpoints:
+        specs.append(_endpoints_tool("global", cfg.global_endpoints))
+        for cmd in cfg.global_commands():
+            specs.append(_http_tool("global", cfg.global_endpoints[cmd.endpoint], cmd, audit))
     return specs

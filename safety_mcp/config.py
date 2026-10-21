@@ -9,6 +9,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 STAND_RE = re.compile(r"^[a-z][a-z0-9]{0,15}$")
 HOST_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,62}$")
@@ -25,8 +26,16 @@ RESERVED_STANDS = {"global"}
 ROLES = ("ro", "rw")
 PICKS = ("first", "all", "host")
 COMMAND_FIELDS = {"type", "description", "tags", "pick", "params", "cmd"}
+HTTP_FIELDS = {"type", "description", "scope", "endpoint", "method", "path", "params", "expect"}
+HTTP_RESERVED = {"auth", "headers", "body", "via"}
+HTTP_METHODS = ("GET", "HEAD")
+EXPECT_FIELDS = {"status", "body_contains", "max_ms"}
+ENDPOINT_RE = re.compile(r"^[a-z0-9_]{1,32}$")
+HTTP_PATH_RE = re.compile(r"^/[A-Za-z0-9._~:@%/?=&+,-]{0,300}$")
+RESERVED_PARAMS = {"host", "dry_run", "mode"}
 STAND_FIELDS = {"ssh_user", "known_hosts", "keys", "hosts", "max_parallel", "endpoints", "agent_otp"}
 HOST_FIELDS = {"address", "tags"}
+ENDPOINT_FIELDS = {"base_url", "ca_file", "allow_http", "tls_verify"}
 
 DEFAULT_MAX_PARALLEL = 5
 DEFAULT_MAX_HOSTS = 20
@@ -43,6 +52,17 @@ class Host:
     tags: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class Endpoint:
+    name: str
+    base_url: str            # без завершающего /
+    scheme: str
+    hostname: str
+    port: int
+    ca_file: str | None      # абсолютный путь или None
+    tls_verify: bool = True  # false — не проверять сертификат (задаётся только в инвентаре)
+
+
 @dataclass
 class Stand:
     name: str
@@ -52,6 +72,7 @@ class Stand:
     hosts: dict[str, Host]
     max_parallel: int
     agent_otp: bool = False  # можно ли передавать OTP-код через агента (rw_approve)
+    endpoints: dict = field(default_factory=dict)  # имя -> Endpoint
 
 
 @dataclass(frozen=True)
@@ -65,6 +86,11 @@ class Command:
     params: dict             # имя -> ERE-regex
     cmd: str
     origin: str              # "common" или имя стенда
+    scope: str = "stand"     # http: "stand" или "global"
+    endpoint: str = ""       # http: имя эндпоинта
+    method: str = "GET"      # http
+    path: str = ""           # http: шаблон пути
+    expect: dict = field(default_factory=dict)  # http: status, body_contains, max_ms
 
 
 @dataclass
@@ -76,11 +102,16 @@ class Config:
     common: dict[str, dict[str, Command]]                 # kind -> name -> Command
     per_stand: dict[str, dict[str, dict[str, Command]]] = field(default_factory=dict)
     raw_digest_source: bytes = b""
+    global_endpoints: dict = field(default_factory=dict)  # имя -> Endpoint
+
+    def global_commands(self) -> list[Command]:
+        return sorted((c for c in self.common.get("read", {}).values() if c.type == "http" and c.scope == "global"),
+                      key=lambda c: c.name)
 
     def commands_for(self, stand: str) -> list[Command]:
         out = []
         for kind in ("read", "write"):
-            out.extend(self.common.get(kind, {}).values())
+            out.extend(c for c in self.common.get(kind, {}).values() if c.scope != "global")
             out.extend(self.per_stand.get(stand, {}).get(kind, {}).values())
         return sorted(out, key=lambda c: (c.kind, c.name))
 
@@ -117,18 +148,81 @@ def check_ere(regex: str, where: str) -> None:
         raise _err(f"{where}: некорректный regex: {e}") from e
 
 
+def _parse_params(raw: dict, where: str) -> dict:
+    params = raw.get("params", {})
+    if not isinstance(params, dict):
+        raise _err(f"{where}: params должен быть объектом")
+    for pname, rx in params.items():
+        if not PARAM_NAME_RE.match(pname) or pname in RESERVED_PARAMS:
+            raise _err(f"{where}: недопустимое имя параметра {pname!r} (зарезервированы: {sorted(RESERVED_PARAMS)})")
+        check_ere(rx, f"{where}.params.{pname}")
+    return dict(params)
+
+
+def _parse_http_command(name: str, raw: dict, kind: str, origin: str, where: str) -> Command:
+    reserved = set(raw) & HTTP_RESERVED
+    if reserved:
+        raise _err(f"{where}: поля {sorted(reserved)} зарезервированы и в этой версии не поддерживаются")
+    unknown = set(raw) - HTTP_FIELDS
+    if unknown:
+        raise _err(f"{where}: неизвестные поля {sorted(unknown)}")
+    if kind != "read":
+        raise _err(f"{where}: HTTP-команды бывают только в блоке read")
+    scope = raw.get("scope", "stand")
+    if scope not in ("stand", "global"):
+        raise _err(f"{where}: scope должен быть stand или global")
+    if scope == "global" and origin != "common":
+        raise _err(f"{where}: scope=global допустим только в блоке common")
+    endpoint = raw.get("endpoint")
+    if not isinstance(endpoint, str) or not ENDPOINT_RE.match(endpoint):
+        raise _err(f"{where}: endpoint обязателен ({ENDPOINT_RE.pattern})")
+    method = raw.get("method", "GET")
+    if method not in HTTP_METHODS:
+        raise _err(f"{where}: method {method!r} не поддерживается (только {', '.join(HTTP_METHODS)})")
+    path = raw.get("path", "/")
+    params = _parse_params(raw, where)
+    if not isinstance(path, str):
+        raise _err(f"{where}: path должен быть строкой")
+    placeholders = PLACEHOLDER_RE.findall(path)
+    if sorted(set(placeholders)) != sorted(params):
+        raise _err(f"{where}: плейсхолдеры в path {sorted(set(placeholders))} не совпадают с params {sorted(params)}")
+    literal = PLACEHOLDER_RE.sub("x", path)
+    if not HTTP_PATH_RE.match(literal) or literal.startswith("//") or "/../" in literal + "/" or "\\" in literal:
+        raise _err(f"{where}: недопустимый path (должен начинаться с /, без //, .. и спецсимволов)")
+    expect = raw.get("expect", {}) or {}
+    if not isinstance(expect, dict) or set(expect) - EXPECT_FIELDS:
+        raise _err(f"{where}: expect допускает только {sorted(EXPECT_FIELDS)}")
+    st = expect.get("status")
+    if st is not None and (not isinstance(st, list) or not st or not all(
+            isinstance(x, int) and not isinstance(x, bool) and 100 <= x <= 599 for x in st)):
+        raise _err(f"{where}: expect.status — непустой список кодов 100..599")
+    bc = expect.get("body_contains")
+    if bc is not None and (not isinstance(bc, str) or not 0 < len(bc) <= 200):
+        raise _err(f"{where}: expect.body_contains — строка 1..200 символов")
+    if "max_ms" in expect:
+        _int_setting(expect["max_ms"], f"{where}: expect.max_ms", 1, 60000)
+    desc = raw.get("description", "")
+    if not isinstance(desc, str):
+        raise _err(f"{where}: description должен быть строкой")
+    return Command(name=name, kind=kind, type="http", description=desc, tags=(), pick="first", params=params,
+                   cmd="", origin=origin, scope=scope, endpoint=endpoint, method=method, path=path,
+                   expect=dict(expect))
+
+
 def _parse_command(name: str, raw: dict, kind: str, origin: str) -> Command:
     where = f"commands.json: {origin}.{kind}.{name}"
     if not CMD_NAME_RE.match(name):
         raise _err(f"{where}: недопустимое имя команды")
     if not isinstance(raw, dict):
         raise _err(f"{where}: ожидается объект")
+    ctype = raw.get("type", "ssh")
+    if ctype == "http":
+        return _parse_http_command(name, raw, kind, origin, where)
+    if ctype != "ssh":
+        raise _err(f"{where}: type={ctype!r} не поддерживается (ssh или http)")
     unknown = set(raw) - COMMAND_FIELDS
     if unknown:
-        raise _err(f"{where}: неизвестные поля {sorted(unknown)} (http/auth/headers/body/via в этой версии не поддерживаются)")
-    ctype = raw.get("type", "ssh")
-    if ctype != "ssh":
-        raise _err(f"{where}: type={ctype!r} в этой версии не поддерживается (только ssh)")
+        raise _err(f"{where}: неизвестные поля {sorted(unknown)}")
     cmd = raw.get("cmd")
     if not isinstance(cmd, str) or not cmd.strip():
         raise _err(f"{where}: поле cmd обязательно")
@@ -140,13 +234,7 @@ def _parse_command(name: str, raw: dict, kind: str, origin: str) -> Command:
         raise _err(f"{where}: pick должен быть одним из {PICKS}")
     if kind == "write" and pick == "all":
         raise _err(f"{where}: команды записи не могут выполняться на всех хостах (pick: all)")
-    params = raw.get("params", {})
-    if not isinstance(params, dict):
-        raise _err(f"{where}: params должен быть объектом")
-    for pname, rx in params.items():
-        if not PARAM_NAME_RE.match(pname) or pname == "host":
-            raise _err(f"{where}: недопустимое имя параметра {pname!r}")
-        check_ere(rx, f"{where}.params.{pname}")
+    params = _parse_params(raw, where)
     placeholders = PLACEHOLDER_RE.findall(cmd)
     if sorted(set(placeholders)) != sorted(params):
         raise _err(f"{where}: плейсхолдеры в cmd {sorted(set(placeholders))} не совпадают с params {sorted(params)}")
@@ -176,6 +264,49 @@ def _parse_command_block(block, origin: str) -> dict[str, dict[str, Command]]:
         if not isinstance(items, dict):
             raise _err(f"commands.json: {origin}.{kind}: ожидается объект")
         out[kind] = {n: _parse_command(n, r, kind, origin) for n, r in items.items()}
+    return out
+
+
+def _parse_endpoints(raw, where: str, conf_dir: str) -> dict:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise _err(f"{where}: ожидается объект")
+    out = {}
+    for name, e in raw.items():
+        ew = f"{where}.{name}"
+        if not ENDPOINT_RE.match(name):
+            raise _err(f"{ew}: недопустимое имя эндпоинта")
+        if not isinstance(e, dict) or set(e) - ENDPOINT_FIELDS:
+            raise _err(f"{ew}: допустимы только поля {sorted(ENDPOINT_FIELDS)}")
+        url = e.get("base_url")
+        allow_http = e.get("allow_http", False)
+        if not isinstance(allow_http, bool):
+            raise _err(f"{ew}.allow_http: ожидается true или false")
+        if not isinstance(url, str):
+            raise _err(f"{ew}.base_url обязателен")
+        try:
+            u = urlsplit(url)
+            port = u.port
+        except ValueError as ex:
+            raise _err(f"{ew}.base_url: некорректный URL") from ex
+        if u.scheme not in (("https", "http") if allow_http else ("https",)):
+            raise _err(f"{ew}.base_url: допускается только https://" + (" (или http:// с allow_http)" if not allow_http else ""))
+        if not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ("", "/"):
+            raise _err(f"{ew}.base_url: нужен только схема://хост[:порт], без пути, query и учётных данных")
+        tls_verify = e.get("tls_verify", True)
+        if not isinstance(tls_verify, bool):
+            raise _err(f"{ew}.tls_verify: ожидается true или false")
+        ca = e.get("ca_file")
+        ca_path = None
+        if ca is not None:
+            if not isinstance(ca, str) or "/" in ca or not ca:
+                raise _err(f"{ew}.ca_file: имя файла в каталоге конфига")
+            ca_path = os.path.join(conf_dir, ca)
+            if not os.path.isfile(ca_path):
+                raise _err(f"{ew}.ca_file: файл {ca} не найден")
+        port = port or (443 if u.scheme == "https" else 80)
+        out[name] = Endpoint(name, f"{u.scheme}://{u.netloc}", u.scheme, u.hostname, port, ca_path, tls_verify)
     return out
 
 
@@ -233,7 +364,8 @@ def _parse_stand(name: str, raw: dict, conf_dir: str, default_parallel: int) -> 
     agent_otp = raw.get("agent_otp", False)
     if not isinstance(agent_otp, bool):
         raise _err(f"{where}.agent_otp: ожидается true или false")
-    return Stand(name, ssh_user, kh_path, dict(keys_raw), hosts, mp, agent_otp)
+    endpoints = _parse_endpoints(raw.get("endpoints"), f"{where}.endpoints", conf_dir)
+    return Stand(name, ssh_user, kh_path, dict(keys_raw), hosts, mp, agent_otp, endpoints)
 
 
 def _check_not_writable(paths: list[str]) -> None:
@@ -279,6 +411,10 @@ def load_config(conf_dir: str | None = None, check_writable: bool = True) -> Con
     if not isinstance(stands_raw, dict) or not stands_raw:
         raise _err("inventory.json: нужен непустой блок stands")
     stands = {n: _parse_stand(n, r, conf_dir, max_parallel) for n, r in stands_raw.items()}
+    glob = inv.get("global", {}) or {}
+    if not isinstance(glob, dict) or set(glob) - {"endpoints"}:
+        raise _err("inventory.json: global допускает только endpoints")
+    global_endpoints = _parse_endpoints(glob.get("endpoints"), "inventory.json: global.endpoints", conf_dir)
 
     if not isinstance(cmds, dict) or set(cmds) - {"common", "stands"}:
         raise _err("commands.json: допустимы только ключи common и stands")
@@ -302,13 +438,28 @@ def load_config(conf_dir: str | None = None, check_writable: bool = True) -> Con
     cnames = list(common.get("read", {})) + list(common.get("write", {}))
     if len(cnames) != len(set(cnames)):
         raise _err("commands.json: common: одинаковое имя в read и write")
-    for reserved in ("hosts_list", "approve", "result"):
+    # HTTP-команды должны ссылаться на существующие эндпоинты
+    for c in common.get("read", {}).values():
+        if c.type != "http":
+            continue
+        if c.scope == "global" and c.endpoint not in global_endpoints:
+            raise _err(f"commands.json: common.read.{c.name}: эндпоинта {c.endpoint!r} нет в global.endpoints")
+        if c.scope == "stand" and not any(c.endpoint in s.endpoints for s in stands.values()):
+            raise _err(f"commands.json: common.read.{c.name}: эндпоинта {c.endpoint!r} нет ни у одного стенда")
+    for sname, block in per_stand.items():
+        for c in block.get("read", {}).values():
+            if c.type == "http" and c.endpoint not in stands[sname].endpoints:
+                raise _err(f"commands.json: stands.{sname}.read.{c.name}: у стенда нет эндпоинта {c.endpoint!r}")
+    for reserved in ("hosts_list", "approve", "result", "endpoints_list"):
         if reserved in cnames:
             raise _err(f"commands.json: имя {reserved!r} зарезервировано")
 
     if check_writable:
         paths = [conf_dir, inv_path, cmd_path] + [s.known_hosts for s in stands.values() if s.known_hosts]
+        paths += [e.ca_file for s in stands.values() for e in s.endpoints.values() if e.ca_file]
+        paths += [e.ca_file for e in global_endpoints.values() if e.ca_file]
         _check_not_writable(paths)
 
     return Config(conf_dir=conf_dir, stands=stands, max_parallel=max_parallel, max_hosts=max_hosts,
-                  common=common, per_stand=per_stand, raw_digest_source=raw_bytes)
+                  common=common, per_stand=per_stand, raw_digest_source=raw_bytes,
+                  global_endpoints=global_endpoints)

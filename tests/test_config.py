@@ -129,9 +129,9 @@ def test_reserved_fields_rejected(make_cfg, field):
         make_cfg(commands=c)
 
 
-def test_http_type_not_supported_yet(make_cfg):
+def test_unknown_type_rejected(make_cfg):
     c = copy.deepcopy(COMMANDS)
-    c["common"]["read"]["disk_free_all"]["type"] = "http"
+    c["common"]["read"]["disk_free_all"]["type"] = "tcp"
     with pytest.raises(ConfigError, match="не поддерживается"):
         make_cfg(commands=c)
 
