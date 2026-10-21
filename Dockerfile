@@ -16,6 +16,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY safety_mcp/ safety_mcp/
 COPY server.py approver.py ./
 COPY wrapper/ wrapper/
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 MCP_SSH_CONF=/etc/mcp-ssh
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SAFETY_CONF=/conf
 USER mcp
 ENTRYPOINT ["python", "/app/server.py"]

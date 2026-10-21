@@ -4,7 +4,7 @@
 #
 # usage: ./init-local.sh [--dir <каталог>] [--keys <стенд>]... [--no-chown]
 #   --dir       каталог данных (по умолчанию local/ рядом со скриптом)
-#   --keys      сгенерировать ключи mcp_<стенд>_ro / mcp_<стенд>_rw (можно несколько раз)
+#   --keys      сгенерировать ключи safety_<стенд>_ro / safety_<стенд>_rw (можно несколько раз)
 #   --no-chown  не менять владельца каталогов approver (без Docker; для тестов)
 set -euo pipefail
 
@@ -48,6 +48,7 @@ fi
 
 umask 077
 # 1. каталоги
+NEWCONF=0; [ -d "$DIR/conf" ] || NEWCONF=1
 for d in conf keys-ro keys-rw state queue queue/requests queue/results approver-state; do
   if [ -d "$DIR/$d" ]; then note_old "$d/"; else mkdir -p "$DIR/$d"; note_new "$d/"; fi
 done
@@ -59,6 +60,8 @@ for d in conf state queue queue/requests; do [ -O "$DIR/$d" ] && chmod 755 "$DIR
 umask 022
 for f in "$HERE"/conf.example/*; do
   n=$(basename "$f")
+  # заглушки known_hosts примера нужны только в новом conf/, в рабочий не подкладываем
+  [[ "$n" == known_hosts.* && "$NEWCONF" = 0 && ! -e "$DIR/conf/$n" ]] && continue
   if [ -e "$DIR/conf/$n" ]; then note_old "conf/$n"; else cp "$f" "$DIR/conf/$n"; note_new "conf/$n"; fi
 done
 if [ -e "$DIR/.env" ]; then note_old ".env"; else cp "$HERE/.env.example" "$DIR/.env"; note_new ".env"; fi
@@ -76,11 +79,11 @@ fi
 umask 077
 mkdir -p "$HOME/.ssh"
 for s in "${STANDS[@]}"; do
-  ro="mcp_${s}_ro"; rw="mcp_${s}_rw"
+  ro="safety_${s}_ro"; rw="safety_${s}_rw"
   if [ -e "$DIR/keys-ro/$ro" ] || [ -e "$HOME/.ssh/$ro" ]; then
     note_old "ключ $ro"
   else
-    ssh-keygen -q -t ed25519 -N "" -C "safety-mcp $s ro" -f "$DIR/keys-ro/$ro"
+    ssh-keygen -q -t ed25519 -N "" -C "safety $s ro" -f "$DIR/keys-ro/$ro"
     cp -p "$DIR/keys-ro/$ro" "$DIR/keys-ro/$ro.pub" "$HOME/.ssh/"
     note_new "ключ $ro (local/keys-ro и ~/.ssh)"
   fi
@@ -88,7 +91,7 @@ for s in "${STANDS[@]}"; do
     note_old "ключ $rw"
   else
     T=$(mktemp -d)
-    ssh-keygen -q -t ed25519 -N "" -C "safety-mcp $s rw" -f "$T/$rw"
+    ssh-keygen -q -t ed25519 -N "" -C "safety $s rw" -f "$T/$rw"
     cp "$T/$rw.pub" "$HOME/.ssh/$rw.pub"
     if [ "$CHOWN" = 1 ]; then
       docker run --rm --user 0 --entrypoint sh -v "$DIR:/w" -v "$T:/t:ro" "$IMAGE" -c \
@@ -118,7 +121,7 @@ cat <<EOF
   1. Впишите стенды и хосты: $DIR/conf/inventory.json (пути ключей: /keys/<имя> и /keys-rw/<имя>)
      и команды: $DIR/conf/commands.json
   2. Ключи хостов: ssh-keyscan -t ed25519 <адрес> >> $DIR/conf/known_hosts.<стенд>  (сверьте отпечаток!)
-  3. Обёртка на хостах: MCP_SSH_CONF=$DIR/conf DEPLOY_SSH_KEY=~/.ssh/<ваш_ключ> DEPLOY_KEY_DIR=~/.ssh \\
+  3. Обёртка на хостах: SAFETY_CONF=$DIR/conf DEPLOY_SSH_KEY=~/.ssh/<ваш_ключ> DEPLOY_KEY_DIR=~/.ssh \\
        wrapper/deploy.sh <стенд> --install-keys
   4. Запуск: docker compose --project-directory $DIR -f $HERE/docker-compose.yml up -d
      MCP: http://127.0.0.1:8766/mcp, заголовок Authorization: Bearer <содержимое $DIR/mcp-token>

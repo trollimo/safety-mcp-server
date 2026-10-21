@@ -53,25 +53,25 @@
     },
     "write": {
       "file_create": {
-        "description": "Создать пустой файл в каталоге ~/mcp-sandbox (каталог должен существовать)",
+        "description": "Создать пустой файл в каталоге ~/safety-sandbox (каталог должен существовать)",
         "tags": [],
         "pick": "host",
         "params": {
           "path": {
-            "pattern": "mcp-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}",
-            "description": "Путь к файлу внутри ~/mcp-sandbox, например mcp-sandbox/test.txt"
+            "pattern": "safety-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}",
+            "description": "Путь к файлу внутри ~/safety-sandbox, например safety-sandbox/test.txt"
           }
         },
         "cmd": "touch -- {path}"
       },
       "file_delete": {
-        "description": "Удалить файл в каталоге ~/mcp-sandbox (каталоги не удаляет)",
+        "description": "Удалить файл в каталоге ~/safety-sandbox (каталоги не удаляет)",
         "tags": [],
         "pick": "host",
         "params": {
           "path": {
-            "pattern": "mcp-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}",
-            "description": "Путь к удаляемому файлу внутри ~/mcp-sandbox"
+            "pattern": "safety-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}",
+            "description": "Путь к удаляемому файлу внутри ~/safety-sandbox"
           }
         },
         "cmd": "rm -f -- {path}"

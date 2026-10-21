@@ -39,7 +39,7 @@ services:
     volumes:
       - type: bind                 # inventory.json, commands.json, known_hosts.*
         source: ./conf
-        target: /etc/mcp-ssh
+        target: /conf
         read_only: true
         bind:
           create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
@@ -89,7 +89,7 @@ services:
     volumes:
       - type: bind
         source: ./conf
-        target: /etc/mcp-ssh
+        target: /conf
         read_only: true
         bind:
           create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root

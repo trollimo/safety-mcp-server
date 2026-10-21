@@ -64,7 +64,7 @@ flowchart LR
     H((Человек<br/>FreeOTP)) -- "код на странице" --> P[approver<br/>ключ rw]
     H -. "код в чате → rw_approve" .-> A
     Q --> P
-    P -- "ssh, ключ rw" --> W[mcp-wrapper<br/>на сервере]
+    P -- "ssh, ключ rw" --> W[safety-wrapper<br/>на сервере]
     W -- "только команды из rules.ro / rules.rw" --> S[(сервер)]
 ```
 
@@ -72,7 +72,7 @@ flowchart LR
 |---|---|---|
 | `server.py` | контейнер `safety-mcp-server` | MCP-сервер на `127.0.0.1:8766/mcp` (Bearer-токен) и CLI администратора |
 | `approver.py` | контейнер `approver` | Страница подтверждения на `127.0.0.1:8765`, проверка TOTP, выполнение rw |
-| `wrapper/mcp-wrapper` | `~/.mcp-ssh/` на каждом хосте | Принудительная команда для ключей MCP: пропускает только команды из правил |
+| `wrapper/safety-wrapper` | `~/safety-support/` на каждом хосте | Принудительная команда для ключей MCP: пропускает только команды из правил |
 | `wrapper/deploy.sh` | машина администратора | Генерирует правила и раскладывает обёртку на хосты |
 | `wrapper/open-new-requests.sh` | машина администратора | Открывает страницу подтверждения при новой заявке |
 
@@ -119,13 +119,13 @@ docker compose build
 <summary>То же вручную</summary>
 
 ```bash
-ssh-keygen -t ed25519 -N "" -f ~/.ssh/mcp_<стенд>_ro
-ssh-keygen -t ed25519 -N "" -f ~/.ssh/mcp_<стенд>_rw
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/safety_<стенд>_ro
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/safety_<стенд>_rw
 
 mkdir -p local/{conf,keys-ro,keys-rw,state,queue/requests,queue/results,approver-state}
-cp ~/.ssh/mcp_<стенд>_ro* local/keys-ro/
-mv ~/.ssh/mcp_<стенд>_rw local/keys-rw/ && cp ~/.ssh/mcp_<стенд>_rw.pub local/keys-rw/
-chmod 700 local/keys-ro local/keys-rw && chmod 600 local/keys-ro/mcp_*_ro local/keys-rw/mcp_*_rw
+cp ~/.ssh/safety_<стенд>_ro* local/keys-ro/
+mv ~/.ssh/safety_<стенд>_rw local/keys-rw/ && cp ~/.ssh/safety_<стенд>_rw.pub local/keys-rw/
+chmod 700 local/keys-ro local/keys-rw && chmod 600 local/keys-ro/safety_*_ro local/keys-rw/safety_*_rw
 (umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32), end="")' > local/mcp-token)
 
 # каталоги approver принадлежат APPROVER_UID (1001), остальные — MCP_UID (1000)
@@ -151,11 +151,24 @@ ssh-keyscan -t ed25519 <адрес> >> local/conf/known_hosts.<стенд>   # �
 Выполняется вашим обычным доступом к `ssh_user`. Пользователей скрипт не создаёт, системные файлы не трогает.
 
 ```bash
-MCP_SSH_CONF=$PWD/local/conf DEPLOY_SSH_KEY=~/.ssh/<ваш_ключ> DEPLOY_KEY_DIR=~/.ssh \
+DEPLOY_SSH_KEY=~/.ssh/<ваш_ключ> DEPLOY_KEY_DIR=~/.ssh \
   wrapper/deploy.sh <стенд> --install-keys
 ```
 
 В конце скрипт проверяет, что ro-ключ ограничен: произвольная команда должна получить отказ с кодом 126.
+
+На сервере всё лежит в одном каталоге `~/safety-support/` пользователя `ssh_user`; слова `mcp` в именах нет:
+
+```text
+~/safety-support/
+├── safety-wrapper        # обёртка (принудительная команда ключей)
+├── rules.ro, rules.rw    # разрешённые команды
+└── backup/               # бэкапы authorized_keys перед каждым изменением
+```
+
+Вне каталога — только строки в `~/.ssh/authorized_keys` (sshd читает ключи только оттуда):
+`command="/home/<user>/safety-support/safety-wrapper ro",restrict ssh-ed25519 … safety <стенд> ro`.
+Если строка с тем же ключом уже есть, `--install-keys` заменяет её, а не дублирует.
 
 ### 5. FreeOTP (один раз, в своём терминале)
 
@@ -270,10 +283,10 @@ MCP работает и **без OTP**: команды `ro` доступны, `r
 Filesystem      Size  Used Avail Use% Mounted on
 /dev/vda1        58G  4.1G   54G   8% /
 
-=== dev_rw_file_create {"host": "dev-app1", "path": "mcp-sandbox/x.txt", "dry_run": true}
+=== dev_rw_file_create {"host": "dev-app1", "path": "safety-sandbox/x.txt", "dry_run": true}
 [stand=dev role=rw] ПРОБНЫЙ ЗАПУСК (dry_run): на сервер ничего не отправлено
 хосты (1): dev-app1 (203.0.113.10)
-команда: touch -- mcp-sandbox/x.txt
+команда: touch -- safety-sandbox/x.txt
 правило серверной обёртки rules.rw: совпадает
 заявка НЕ создана.
 
@@ -323,8 +336,8 @@ sequenceDiagram
 
 ## Конфигурация
 
-Каталог `local/conf/` (в контейнере `/etc/mcp-ssh`) монтируется **только для чтения**. Если конфиг доступен
-на запись, сервер не стартует (для отладки: `MCP_SSH_ALLOW_WRITABLE=1`).
+Каталог `local/conf/` (в контейнере `/conf`) монтируется **только для чтения**. Если конфиг доступен
+на запись, сервер не стартует (для отладки: `SAFETY_ALLOW_WRITABLE=1`).
 
 ### `inventory.json`
 
@@ -335,7 +348,7 @@ sequenceDiagram
     "dev": {
       "ssh_user": "opsuser",
       "known_hosts": "known_hosts.dev",
-      "keys": {"ro": "/keys/mcp_dev_ro", "rw": "/keys-rw/mcp_dev_rw"},
+      "keys": {"ro": "/keys/safety_dev_ro", "rw": "/keys-rw/safety_dev_rw"},
       "agent_otp": true,
       "hosts": {
         "dev-sw-m1": {"address": "10.10.0.11", "tags": ["swarm_manager", "docker"]},
@@ -384,7 +397,7 @@ sequenceDiagram
     "write": {
       "file_create": {
         "pick": "host",
-        "params": {"path": "mcp-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}"},
+        "params": {"path": "safety-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}"},
         "cmd": "touch -- {path}"
       }
     }
@@ -428,21 +441,22 @@ HTTP-команда (только в блоке `read`):
 | Команда для всех стендов | `local/conf/commands.json` → `common.read` / `common.write` | `wrapper/deploy.sh <стенд>` для каждого стенда |
 | Команда для одного стенда | `local/conf/commands.json` → `stands.<стенд>` | `wrapper/deploy.sh <стенд>` |
 | Хост | `local/conf/inventory.json` → `stands.<стенд>.hosts`, ключ хоста в `known_hosts.<стенд>` | `wrapper/deploy.sh <стенд> <хост> --install-keys` |
-| Стенд | `local/conf/inventory.json` → `stands`, ключи `mcp_<стенд>_ro/rw` | `wrapper/deploy.sh <стенд> --install-keys` |
+| Стенд | `local/conf/inventory.json` → `stands`, ключи `safety_<стенд>_ro/rw` | `wrapper/deploy.sh <стенд> --install-keys` |
 
 После изменений переподключите MCP в клиенте (`/mcp` → reconnect). Проверка конфига:
 `docker compose --project-directory local -f docker-compose.yml run --rm safety-mcp-server check`.
 
 > [!CAUTION]
 > Не добавляйте команды, умеющие запускать другие: `find -exec`, `awk`, `less`, `vim`, `tar`, `git`,
-> `systemctl edit`, `docker exec`. И команды, пишущие в `~/.mcp-ssh` или `~/.ssh`.
+> `systemctl edit`, `docker exec`. Команды, затрагивающие `safety-support` или `.ssh`, обёртка отклоняет
+> всегда, даже если правило их разрешает.
 
 ## Модель безопасности
 
 | Угроза | Защита |
 |---|---|
 | Агент выполняет произвольную команду | Нет shell: только имена инструментов, параметры по regex, `shell=False` |
-| Обход MCP (ошибка в коде, подмена) | Обёртка на сервере пропускает только команды из правил, коды 126 на всё остальное |
+| Обход MCP (ошибка в коде, подмена) | Обёртка на сервере пропускает только команды из правил, коды 126 на всё остальное; `safety-support` и `.ssh` недоступны любой команде |
 | Агент сам одобряет изменение | Ключ `rw` и секрет OTP только у approver; код знает только человек |
 | Подмена заявки в очереди | Approver проверяет хэш команды, правила `write`, срок, берёт адрес из инвентаря |
 | Агент меняет конфиг | Конфиг монтируется `:ro`, сервер отказывается стартовать с записываемым конфигом |
@@ -476,9 +490,9 @@ python3 -m venv .venv
 CLI администратора (без пакета `mcp`, на чистом Python):
 
 ```bash
-MCP_SSH_CONF=local/conf python3 server.py check
-MCP_SSH_CONF=local/conf python3 server.py list-hosts <стенд>
-MCP_SSH_CONF=local/conf python3 server.py gen-rules <стенд> <хост> ro
+SAFETY_CONF=local/conf python3 server.py check
+SAFETY_CONF=local/conf python3 server.py list-hosts <стенд>
+SAFETY_CONF=local/conf python3 server.py gen-rules <стенд> <хост> ro
 ```
 
 ## Структура проекта
@@ -501,7 +515,7 @@ safety-mcp-server/
 │   ├── rules.py              # генерация rules.ro / rules.rw
 │   └── totp.py               # RFC 6238
 ├── wrapper/
-│   ├── mcp-wrapper           # обёртка на сервере
+│   ├── safety-wrapper           # обёртка на сервере
 │   ├── deploy.sh             # раскладка обёртки и ключей
 │   └── open-new-requests.sh  # автооткрытие страницы
 ├── conf.example/             # пример конфига

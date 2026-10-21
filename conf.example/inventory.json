@@ -8,8 +8,8 @@
       "ssh_user": "opsuser",
       "known_hosts": "known_hosts.dev",
       "keys": {
-        "ro": "/keys/mcp_dev_ro",
-        "rw": "/keys-rw/mcp_dev_rw"
+        "ro": "/keys/safety_dev_ro",
+        "rw": "/keys-rw/safety_dev_rw"
       },
       "agent_otp": true,
       "hosts": {
@@ -40,7 +40,7 @@
       "ssh_user": "opsuser",
       "known_hosts": "known_hosts.prod",
       "keys": {
-        "ro": "/keys/mcp_prod_ro"
+        "ro": "/keys/safety_prod_ro"
       },
       "max_parallel": 10,
       "hosts": {

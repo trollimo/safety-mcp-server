@@ -10,7 +10,7 @@ sys.path.insert(0, ROOT)
 
 from safety_mcp.config import load_config  # noqa: E402
 
-PATH_RX = "mcp-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}"
+PATH_RX = "safety-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}"
 
 INVENTORY = {
     "settings": {"max_parallel": 3, "max_hosts": 20},
@@ -82,7 +82,7 @@ def write_conf(path, inventory=None, commands=None):
 
 @pytest.fixture
 def conf_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("MCP_SSH_ALLOW_WRITABLE", "1")
+    monkeypatch.setenv("SAFETY_ALLOW_WRITABLE", "1")
     return write_conf(str(tmp_path / "conf"))
 
 
@@ -93,7 +93,7 @@ def cfg(conf_dir):
 
 @pytest.fixture
 def make_cfg(tmp_path, monkeypatch):
-    monkeypatch.setenv("MCP_SSH_ALLOW_WRITABLE", "1")
+    monkeypatch.setenv("SAFETY_ALLOW_WRITABLE", "1")
     counter = {"n": 0}
 
     def make(inventory=None, commands=None):

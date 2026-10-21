@@ -61,13 +61,13 @@ def rid_of(out):
 
 def test_rw_approve_via_agent(stack):
     tools, q, ap, runner, clock, key = stack
-    out = tools["dev_rw_file_create"].fn(host="dev-w1", path="mcp-sandbox/a.txt")
+    out = tools["dev_rw_file_create"].fn(host="dev-w1", path="safety-sandbox/a.txt")
     assert "rw_approve" in out
     rid = rid_of(out)
     res = tools["rw_approve"].fn(id=rid, code="000000" if totp.totp(key, clock()) != "000000" else "111111")
     assert res.startswith("НЕ ПОДТВЕРЖДЕНО") and "осталось попыток: 2" in res and not runner.calls
     res = tools["rw_approve"].fn(id=rid, code=totp.totp(key, clock()))
-    assert "status=approved-ok rc=0" in res and runner.calls == [("dev", "dev-w1", "rw", "touch -- mcp-sandbox/a.txt")]
+    assert "status=approved-ok rc=0" in res and runner.calls == [("dev", "dev-w1", "rw", "touch -- safety-sandbox/a.txt")]
     assert "уже обработана" in tools["rw_approve"].fn(id=rid, code=totp.totp(key, clock()))
     assert "approved-ok" in tools["rw_result"].fn(id=rid)
     assert len(runner.calls) == 1
@@ -75,8 +75,8 @@ def test_rw_approve_via_agent(stack):
 
 def test_rw_approve_forbidden_without_agent_otp(stack):
     tools, q, ap, runner, clock, key = stack
-    rid = rid_of(tools["test_rw_file_create"].fn(host="test-m1", path="mcp-sandbox/a"))
-    assert "rw_approve" not in tools["test_rw_file_create"].fn(host="test-m1", path="mcp-sandbox/b")
+    rid = rid_of(tools["test_rw_file_create"].fn(host="test-m1", path="safety-sandbox/a"))
+    assert "rw_approve" not in tools["test_rw_file_create"].fn(host="test-m1", path="safety-sandbox/b")
     res = tools["rw_approve"].fn(id=rid, code=totp.totp(key, clock()))
     assert res.startswith("ОШИБКА") and not runner.calls
     # даже если файл с кодом подложить напрямую, approver откажет
@@ -92,7 +92,7 @@ def test_rw_approve_forbidden_without_agent_otp(stack):
 @pytest.mark.parametrize("code", ["", "12345", "1234567", "abcdef", "12 456"])
 def test_rw_approve_bad_code_format(stack, code):
     tools, q, *_ = stack
-    rid = rid_of(tools["dev_rw_file_create"].fn(host="dev-w1", path="mcp-sandbox/a"))
+    rid = rid_of(tools["dev_rw_file_create"].fn(host="dev-w1", path="safety-sandbox/a"))
     assert tools["rw_approve"].fn(id=rid, code=code).startswith("ОШИБКА")
     assert not q.code_submissions()
 
@@ -107,12 +107,12 @@ def test_rw_approve_timeout_without_approver(cfg, tmp_path):
     q = Queue(str(tmp_path / "q"))
     q.write_status(True)
     tools = {s.name: s for s in build_tools(cfg, q, Audit(None), "http://x", approve_wait=0.6)}
-    rid = rid_of(tools["dev_rw_file_create"].fn(host="dev-w1", path="mcp-sandbox/a"))
+    rid = rid_of(tools["dev_rw_file_create"].fn(host="dev-w1", path="safety-sandbox/a"))
     assert "ещё не ответил" in tools["rw_approve"].fn(id=rid, code="123456")
 
 
 def test_submission_processed_once(stack):
     tools, q, ap, runner, clock, key = stack
-    rid = rid_of(tools["dev_rw_file_create"].fn(host="dev-w1", path="mcp-sandbox/a"))
+    rid = rid_of(tools["dev_rw_file_create"].fn(host="dev-w1", path="safety-sandbox/a"))
     tools["rw_approve"].fn(id=rid, code=totp.totp(key, clock()))
     assert ap.process_submissions() == 0 and len(runner.calls) == 1

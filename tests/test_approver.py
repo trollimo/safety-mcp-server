@@ -54,7 +54,7 @@ def do_enroll(ap, clock):
     return totp.decode_secret(holder["secret"]), holder["out"].getvalue()
 
 
-def new_req(q, clock, cmd="touch -- mcp-sandbox/a.txt", host="dev-w1", stand="dev"):
+def new_req(q, clock, cmd="touch -- safety-sandbox/a.txt", host="dev-w1", stand="dev"):
     return q.new_request(stand, host, "file_create", cmd, now=clock())["id"]
 
 
@@ -98,7 +98,7 @@ def test_approve_flow_executes_once(env):
     v = ap.view(rid)
     ok, msg = ap.approve(rid, totp.totp(key, clock()), v["csrf"])
     assert ok, msg
-    assert runner.calls == [("dev", "dev-w1", "rw", "touch -- mcp-sandbox/a.txt")]
+    assert runner.calls == [("dev", "dev-w1", "rw", "touch -- safety-sandbox/a.txt")]
     assert q.result(rid)["status"] == "approved-ok"
     ok, msg = ap.approve(rid, totp.totp(key, clock()), v["csrf"])
     assert not ok and "уже обработана" in msg and len(runner.calls) == 1
@@ -109,7 +109,7 @@ def test_code_is_one_time_across_requests(env):
     key, _ = do_enroll(ap, clock)
     clock.t += 30
     code = totp.totp(key, clock())
-    r1, r2 = new_req(q, clock), new_req(q, clock, "rm -f -- mcp-sandbox/a.txt")
+    r1, r2 = new_req(q, clock), new_req(q, clock, "rm -f -- safety-sandbox/a.txt")
     assert ap.approve(r1, code, ap.view(r1)["csrf"])[0]
     ok, msg = ap.approve(r2, code, ap.view(r2)["csrf"])
     assert not ok and len(runner.calls) == 1
@@ -213,7 +213,7 @@ def test_multi_host_one_code(env):
     ap, q, runner, clock = env
     key, _ = do_enroll(ap, clock)
     clock.t += 30
-    rid = q.new_request("dev", ["dev-w2", "dev-m1", "dev-w1"], "file_create", "touch -- mcp-sandbox/a", now=clock())["id"]
+    rid = q.new_request("dev", ["dev-w2", "dev-m1", "dev-w1"], "file_create", "touch -- safety-sandbox/a", now=clock())["id"]
     v = ap.view(rid)
     assert [h.name for h in v["hosts"]] == ["dev-m1", "dev-w1", "dev-w2"]
     ok, msg = ap.approve(rid, totp.totp(key, clock()), v["csrf"])
@@ -233,7 +233,7 @@ def test_multi_host_partial_failure(cfg, tmp_path):
     ap = Approver(cfg, q, str(tmp_path / "data"), runner=runner, clock=clock)
     key, _ = do_enroll(ap, clock)
     clock.t += 30
-    rid = q.new_request("dev", ["dev-w1", "dev-w2"], "file_create", "touch -- mcp-sandbox/a", now=clock())["id"]
+    rid = q.new_request("dev", ["dev-w1", "dev-w2"], "file_create", "touch -- safety-sandbox/a", now=clock())["id"]
     ok, _ = ap.approve(rid, totp.totp(key, clock()), ap.view(rid)["csrf"])
     res = q.result(rid)
     assert not ok and res["status"] == "approved-failed" and "SUMMARY: ok=1 failed=1" in res["output"]
@@ -283,7 +283,7 @@ def test_http_page_and_approve(web):
     clock.t += 30
     rid = new_req(q, clock)
     st, hdr, body = req(port, "GET", f"/r/{rid}")
-    assert st == 200 and "СТЕНД: DEV" in body and "touch -- mcp-sandbox/a.txt" in body
+    assert st == 200 and "СТЕНД: DEV" in body and "touch -- safety-sandbox/a.txt" in body
     assert hdr["Cache-Control"] == "no-store" and hdr["X-Frame-Options"] == "DENY"
     assert "default-src 'none'" in hdr["Content-Security-Policy"]
     csrf = re.search(r"name='csrf' value='([^']+)'", body).group(1)

@@ -4,7 +4,7 @@
 
 ## 1. Цель
 
-Название проекта: **safety-mcp-server**. Внутренние имена каталогов и переменных (`/etc/mcp-ssh`, `~/.mcp-ssh`, `MCP_SSH_CONF`, `MCP_SSH_HOME`, `MCP_SSH_ALLOW_WRITABLE`) остаются как в документе и в названии проекта не участвуют.
+Название проекта: **safety-mcp-server**. Внутренние имена каталогов и переменных (`/conf`, `~/safety-support`, `SAFETY_CONF`, `SAFETY_HOME`, `SAFETY_ALLOW_WRITABLE`) остаются как в документе и в названии проекта не участвуют.
 
 MCP-сервер на Python (`mcp` SDK, `FastMCP`) даёт ИИ-агенту:
 - выполнять **только заранее описанные read-команды** на хостах нескольких стендов (`dev`, `test`, `prod`, ... от 3 и больше) по SSH;
@@ -29,9 +29,9 @@ MCP-сервер на Python (`mcp` SDK, `FastMCP`) даёт ИИ-агенту:
 safety-mcp-server/
   server.py              # весь код MCP + CLI-команды (см. п. 9.1)
   wrapper/
-    mcp-wrapper          # серверная обёртка (п. 9.2), одна для ro и rw
-    deploy.sh            # генерация правил и копирование в ~/.mcp-ssh на хосты (п. 9.4)
-  conf/                  # образец; в бою /etc/mcp-ssh/ (root:root, 0644)
+    safety-wrapper          # серверная обёртка (п. 9.2), одна для ro и rw
+    deploy.sh            # генерация правил и копирование в ~/safety-support на хосты (п. 9.4)
+  conf/                  # образец; в бою /conf (root:root, 0644)
     inventory.json
     commands.json
     known_hosts.dev      # по файлу на стенд
@@ -40,7 +40,7 @@ safety-mcp-server/
 ```
 
 Состояние (не конфиг): `~/.local/state/safety-mcp-server/` (`pending/`, `audit.log`).
-Каталог конфига: переменная `MCP_SSH_CONF`, по умолчанию `/etc/mcp-ssh`.
+Каталог конфига: переменная `SAFETY_CONF`, по умолчанию `/conf`.
 
 ## 4. `inventory.json`
 
@@ -51,8 +51,8 @@ safety-mcp-server/
       "ssh_user": "opsuser",
       "known_hosts": "known_hosts.dev",
       "keys": {
-        "ro": "/home/user/.ssh/mcp_dev_ro",
-        "rw": "/home/user/.ssh/mcp_dev_rw"
+        "ro": "/home/user/.ssh/safety_dev_ro",
+        "rw": "/home/user/.ssh/safety_dev_rw"
       },
       "hosts": {
         "dev-sw-m1": {"address": "10.10.0.11", "tags": ["swarm_manager", "docker"]},
@@ -61,7 +61,7 @@ safety-mcp-server/
       }
     },
     "test": {"ssh_user": "opsuser", "known_hosts": "known_hosts.test",
-             "keys": {"ro": "/home/user/.ssh/mcp_test_ro"}, "hosts": {}}
+             "keys": {"ro": "/home/user/.ssh/safety_test_ro"}, "hosts": {}}
   }
 }
 ```
@@ -93,7 +93,7 @@ safety-mcp-server/
   "stands": {
     "prod": {
       "ssh_user": "opsuser", "known_hosts": "known_hosts.prod",
-      "keys": {"ro": "/home/user/.ssh/mcp_prod_ro"},
+      "keys": {"ro": "/home/user/.ssh/safety_prod_ro"},
       "hosts": {},
       "endpoints": {
         "app": {"base_url": "https://app.example.com"},
@@ -323,7 +323,7 @@ httpx.request(method, url, follow_redirects=False, verify=ca_or_True,
 
 ## 8. Безопасность (обязательно)
 
-1. **Агент не меняет конфиг.** При старте сервер проверяет, что `inventory.json`, `commands.json`, `known_hosts.*` и каталог конфига недоступны текущему пользователю на запись (`os.access(path, os.W_OK)`). Иначе не стартует: «сделайте файлы root:root 0644». В Docker это выполняется монтированием каталога конфига с флагом `:ro` (п. 14). Исключение: `MCP_SSH_ALLOW_WRITABLE=1` (только первая отладка, с предупреждением).
+1. **Агент не меняет конфиг.** При старте сервер проверяет, что `inventory.json`, `commands.json`, `known_hosts.*` и каталог конфига недоступны текущему пользователю на запись (`os.access(path, os.W_OK)`). Иначе не стартует: «сделайте файлы root:root 0644». В Docker это выполняется монтированием каталога конфига с флагом `:ro` (п. 14). Исключение: `SAFETY_ALLOW_WRITABLE=1` (только первая отладка, с предупреждением).
 2. Сервер не пишет в каталог конфига.
 3. Агент передаёт только имя инструмента и значения параметров, проверенные regex.
 4. read всегда использует `keys.ro`. **Ключ `rw` есть только у исполнителя (approver, п. 15), в MCP-сервер он не монтируется.**
@@ -335,9 +335,9 @@ httpx.request(method, url, follow_redirects=False, verify=ca_or_True,
 
 ## 9. Серверная часть
 
-**Пользователей и системные настройки сервера задание не создаёт и не меняет** (никаких `adduser`, `sudoers`, `sshd_config`, файлов вне домашнего каталога). Используется **уже существующий** пользователь `ssh_user` стенда. Обёртка и правила лежат в его домашнем каталоге: `~/.mcp-ssh/`.
+**Пользователей и системные настройки сервера задание не создаёт и не меняет** (никаких `adduser`, `sudoers`, `sshd_config`, файлов вне домашнего каталога). Используется **уже существующий** пользователь `ssh_user` стенда. Обёртка и правила лежат в его домашнем каталоге: `~/safety-support/`.
 
-Принцип: на хосте у `ssh_user` два ключа MCP (ro и rw), каждый в его `~/.ssh/authorized_keys` с принудительной командой `mcp-wrapper ro` / `mcp-wrapper rw`. Обёртка разрешает только команды, подходящие под regex из `~/.mcp-ssh/rules.<role>`. Сама обёртка не меняется при добавлении команд: меняются только правила. Правила **генерируются из `commands.json`** (единый источник), вручную их не редактируют.
+Принцип: на хосте у `ssh_user` два ключа MCP (ro и rw), каждый в его `~/.ssh/authorized_keys` с принудительной командой `safety-wrapper ro` / `safety-wrapper rw`. Обёртка разрешает только команды, подходящие под regex из `~/safety-support/rules.<role>`. Сама обёртка не меняется при добавлении команд: меняются только правила. Правила **генерируются из `commands.json`** (единый источник), вручную их не редактируют.
 
 ### 9.1 CLI-команды `server.py`
 
@@ -358,23 +358,23 @@ httpx.request(method, url, follow_redirects=False, verify=ca_or_True,
 systemctl status --no-pager -- ([a-z0-9][a-z0-9@._-]{0,63})
 ```
 
-### 9.2 `wrapper/mcp-wrapper`
+### 9.2 `wrapper/safety-wrapper`
 
 ```bash
 #!/bin/bash
-# mcp-wrapper <ro|rw>: принудительная команда для ключа.
-# Лежит в ~/.mcp-ssh/mcp-wrapper (копируется скриптом deploy.sh), правила рядом: rules.ro / rules.rw
+# safety-wrapper <ro|rw>: принудительная команда для ключа.
+# Лежит в ~/safety-support/safety-wrapper (копируется скриптом deploy.sh), правила рядом: rules.ro / rules.rw
 VERSION=2
-[[ "${1:-}" == "--version" ]] && { echo "mcp-wrapper $VERSION"; exit 0; }
+[[ "${1:-}" == "--version" ]] && { echo "safety-wrapper $VERSION"; exit 0; }
 set -u
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 role="${1:-}"
 [[ "$role" == ro || "$role" == rw ]] || { echo "bad role" >&2; exit 126; }
-base="${MCP_SSH_HOME:-$HOME/.mcp-ssh}"        # MCP_SSH_HOME нужен только для тестов
+base="${SAFETY_HOME:-$HOME/safety-support}"        # SAFETY_HOME нужен только для тестов
 rules="$base/rules.$role"
 cmd="${SSH_ORIGINAL_COMMAND:-}"
 from="${SSH_CLIENT:-local}"; from="${from%% *}"
-deny() { logger -t mcp-wrapper "DENY role=$role from=$from cmd=$cmd" 2>/dev/null; echo "denied" >&2; exit 126; }
+deny() { logger -t safety-wrapper "DENY role=$role from=$from cmd=$cmd" 2>/dev/null; echo "denied" >&2; exit 126; }
 
 [[ -r "$rules" && -n "$cmd" ]] || deny
 charre='^[A-Za-z0-9 ._@:/=,%+-]{1,300}$'      # без ; | & $ ` > < * кавычек и переводов строк
@@ -384,7 +384,7 @@ while IFS= read -r re || [[ -n "$re" ]]; do
   [[ -z "$re" || "$re" == \#* ]] && continue
   full="^(${re})\$"
   if [[ $cmd =~ $full ]]; then
-    logger -t mcp-wrapper "ALLOW role=$role from=$from cmd=$cmd" 2>/dev/null
+    logger -t safety-wrapper "ALLOW role=$role from=$from cmd=$cmd" 2>/dev/null
     read -ra argv <<<"$cmd"                   # деление по пробелам, shell не участвует
     exec "${argv[@]}"
   fi
@@ -392,15 +392,15 @@ done < "$rules"
 deny
 ```
 
-Важно для безопасности: ни одно правило не должно позволять писать в `~/.mcp-ssh/` и `~/.ssh/` (команды `tee`, `cp`, `mv`, `sed -i`, `ln`, `chmod` в правила не добавлять).
+Важно для безопасности: ни одно правило не должно позволять писать в `~/safety-support/` и `~/.ssh/` (команды `tee`, `cp`, `mv`, `sed -i`, `ln`, `chmod` в правила не добавлять).
 
 ### 9.3 Ключи в `authorized_keys` (без создания пользователей)
 
 Для каждого ключа в `~/.ssh/authorized_keys` пользователя `ssh_user` нужна строка вида (абсолютный путь):
 
 ```
-command="/home/<ssh_user>/.mcp-ssh/mcp-wrapper ro",restrict ssh-ed25519 AAAA... mcp dev ro
-command="/home/<ssh_user>/.mcp-ssh/mcp-wrapper rw",restrict ssh-ed25519 AAAA... mcp dev rw
+command="/home/<ssh_user>/safety-support/safety-wrapper ro",restrict ssh-ed25519 AAAA... safety dev ro
+command="/home/<ssh_user>/safety-support/safety-wrapper rw",restrict ssh-ed25519 AAAA... safety dev rw
 ```
 
 Эти строки добавляет человек вручную, либо `deploy.sh --install-keys` (дописывает недостающие, существующие не трогает). Если публичный ключ уже есть в `authorized_keys` **без** `command=`, `deploy.sh` выводит предупреждение: такой ключ не ограничен, строку нужно заменить.
@@ -413,14 +413,14 @@ command="/home/<ssh_user>/.mcp-ssh/mcp-wrapper rw",restrict ssh-ed25519 AAAA... 
 #!/bin/bash
 # usage: deploy.sh <stand> [host] [--install-keys]
 # Запускает ЧЕЛОВЕК от имени ssh_user стенда (его обычным доступом, переменная DEPLOY_SSH_KEY необязательна).
-# НЕ использует ключи mcp_*_ro/rw. Пользователей не создаёт, системные файлы не меняет.
+# НЕ использует ключи safety_*_ro/rw. Пользователей не создаёт, системные файлы не меняет.
 set -euo pipefail
 STAND=$1; shift; ONLY=""; INSTALL=0
 for a in "$@"; do case "$a" in --install-keys) INSTALL=1;; *) ONLY=$a;; esac; done
 cd "$(dirname "$0")"
 python3 ../server.py check
 U=$(python3 ../server.py ssh-user "$STAND")
-CONF="${MCP_SSH_CONF:-/etc/mcp-ssh}"
+CONF="${SAFETY_CONF:-/conf}"
 BASE=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$CONF/known_hosts.$STAND")
 SSHO=("${BASE[@]}")
 [ -n "${DEPLOY_SSH_KEY:-}" ] && SSHO+=(-i "$DEPLOY_SSH_KEY" -o IdentitiesOnly=yes)
@@ -430,16 +430,16 @@ python3 ../server.py list-hosts "$STAND" | while read -r NAME ADDR; do
   T=$(mktemp -d)
   python3 ../server.py gen-rules "$STAND" "$NAME" ro > "$T/rules.ro"
   python3 ../server.py gen-rules "$STAND" "$NAME" rw > "$T/rules.rw" 2>/dev/null || rm -f "$T/rules.rw"
-  H=$(ssh -n "${SSHO[@]}" "$U@$ADDR" 'echo $HOME'); D="$H/.mcp-ssh"
+  H=$(ssh -n "${SSHO[@]}" "$U@$ADDR" 'echo $HOME'); D="$H/safety-support"
   RM=""; [ -f "$T/rules.rw" ] || RM="rm -f $D/rules.rw;"
   ssh -n "${SSHO[@]}" "$U@$ADDR" "umask 077; mkdir -p $D"
-  scp -q "${SSHO[@]}" mcp-wrapper "$T"/rules.* "$U@$ADDR:$D/"
-  ssh -n "${SSHO[@]}" "$U@$ADDR" "chmod 700 $D $D/mcp-wrapper; chmod 600 $D/rules.*; $RM $D/mcp-wrapper --version"
+  scp -q "${SSHO[@]}" safety-wrapper "$T"/rules.* "$U@$ADDR:$D/"
+  ssh -n "${SSHO[@]}" "$U@$ADDR" "chmod 700 $D $D/safety-wrapper; chmod 600 $D/rules.*; $RM $D/safety-wrapper --version"
   rm -rf "$T"
 
   for ROLE in ro rw; do
-    PUB="$HOME/.ssh/mcp_${STAND}_${ROLE}.pub"; [ -f "$PUB" ] || continue
-    LINE="command=\"$D/mcp-wrapper $ROLE\",restrict $(cat "$PUB")"
+    PUB="$HOME/.ssh/safety_${STAND}_${ROLE}.pub"; [ -f "$PUB" ] || continue
+    LINE="command=\"$D/safety-wrapper $ROLE\",restrict $(cat "$PUB")"
     KEY=$(awk '{print $2}' "$PUB")
     AK=$(ssh -n "${SSHO[@]}" "$U@$ADDR" 'cat ~/.ssh/authorized_keys 2>/dev/null' || true)
     if grep -qxF "$LINE" <<<"$AK"; then echo "$NAME $ROLE: ключ с ограничением на месте"
@@ -455,15 +455,15 @@ python3 ../server.py list-hosts "$STAND" | while read -r NAME ADDR; do
 done
 ```
 
-Вместо `deploy.sh` можно использовать Ansible (`copy` для `mcp-wrapper` и сгенерированных `rules.*` в `~/.mcp-ssh/`), результат тот же.
+Вместо `deploy.sh` можно использовать Ansible (`copy` для `safety-wrapper` и сгенерированных `rules.*` в `~/safety-support/`), результат тот же.
 
 ### 9.5 Когда генерируется и как попадает на хост, как обновляется
 
 - **Генерация правил**: в момент запуска `deploy.sh` на машине администратора, из `commands.json` и `inventory.json`. MCP-сервер ничего не генерирует и ничего не копирует.
-- **Копирование**: `deploy.sh` по SSH от имени самого `ssh_user` создаёт `~/.mcp-ssh/` (0700) и кладёт туда `mcp-wrapper` (0700) и `rules.ro`/`rules.rw` (0600). Если `rw` не настроен, на хосте удаляется устаревший `rules.rw`.
+- **Копирование**: `deploy.sh` по SSH от имени самого `ssh_user` создаёт `~/safety-support/` (0700) и кладёт туда `safety-wrapper` (0700) и `rules.ro`/`rules.rw` (0600). Если `rw` не настроен, на хосте удаляется устаревший `rules.rw`.
 - **Первый раз**: `deploy.sh <stand> --install-keys` (или добавьте строки из п. 9.3 вручную).
 - **Любое изменение** `commands.json`/инвентаря/обёртки: `deploy.sh <stand>` (или для одного хоста `deploy.sh <stand> <host>`). Файлы заменяются целиком; `--version` показывает версию обёртки.
-- **Обновление обёртки**: поднять `VERSION` в `wrapper/mcp-wrapper`, выполнить `deploy.sh` для каждого стенда.
+- **Обновление обёртки**: поднять `VERSION` в `wrapper/safety-wrapper`, выполнить `deploy.sh` для каждого стенда.
 - Агент `deploy.sh` не запускает: скрипт использует доступ человека к `ssh_user`, который агенту не выдаётся.
 
 ## 10. Критерии приёмки (pytest без реального SSH: подменяй `subprocess.run`)
@@ -477,7 +477,7 @@ done
 - Параметры с `; id`, `$(x)`, `-f`, пустые отклоняются, команда не выполняется.
 - Итоговая команда содержит значения через `shlex.quote`; `shell=False`.
 - Write-инструмент не вызывает `ssh`, а создаёт заявку `queue/requests/<id>.json`; `write_result` до одобрения: «ещё не выполнена». Остальные тесты одобрения: п. 15.7.
-- Запуск с конфигом, доступным на запись, не стартует (без `MCP_SSH_ALLOW_WRITABLE`).
+- Запуск с конфигом, доступным на запись, не стартует (без `SAFETY_ALLOW_WRITABLE`).
 - Ключи и пути ключей в ответах инструментов отсутствуют.
 - `gen-rules`: для хоста без тега команды правило не создаётся; параметры в правилах заменены на `(regex)`; спецсимволы в литералах экранированы.
 - Параллельность: при 7 хостах и `max_parallel=3` одновременно запущено не больше 3 вызовов `ssh` (фейковый `subprocess.run` со счётчиком и `sleep`); вывод в порядке имён хостов; сбой одного хоста даёт `ERROR` в его блоке, остальные выполняются; `SUMMARY` верен; `max_parallel` 0, 51, `"a"`, `3.5` отклоняются при старте; число хостов больше `max_hosts` возвращает ошибку без запуска `ssh`; переопределение `max_parallel` у стенда работает.
@@ -488,7 +488,7 @@ done
 - HTTP: `expect` даёт PASS/FAIL по статусу, `body_contains`, `max_ms`; тело в ответе отсутствует при `return_body: false`; ошибка сети возвращает `RESULT: ERROR` без трассировки.
 - HTTP: команда с `method: POST`, `auth`, `headers`, `body`, `via` отклоняется при старте.
 - Стенд с именем `global` отклоняется при старте.
-- Тест обёртки (bash, локально, через `SSH_ORIGINAL_COMMAND` и временный каталог в `MCP_SSH_HOME` с `rules.ro`): разрешённая команда проходит; `uptime; id`, `uptime && id`, `$(id)`, команда не из списка отклоняются с кодом 126.
+- Тест обёртки (bash, локально, через `SSH_ORIGINAL_COMMAND` и временный каталог в `SAFETY_HOME` с `rules.ro`): разрешённая команда проходит; `uptime; id`, `uptime && id`, `$(id)`, команда не из списка отклоняются с кодом 126.
 
 ## 11. План работ
 
@@ -498,7 +498,7 @@ done
 4. Регистрация инструментов, `hosts_list`, `stands_list` (п. 6).
 5. Write-заявки и `write_result` (MCP-сторона, п. 15.2); затем исполнитель (п. 15.3–15.6).
 6. CLI `check`, `list-hosts`, `gen-rules`, `key-path` (п. 9.1) + тесты.
-7. `wrapper/mcp-wrapper`, `deploy.sh` (п. 9.2–9.4) + тест обёртки.
+7. `wrapper/safety-wrapper`, `deploy.sh` (п. 9.2–9.4) + тест обёртки.
 8. Реестр обработчиков (п. 5.2): вынеси SSH в `SshHandler`, добавь `HttpHandler` (п. 5.1, 7.1) + тесты; инструменты `endpoints_list`.
 9. Параллельность `pick: all` (п. 4.0, 7.2) + тесты.
 10. Docker (п. 14).
@@ -512,10 +512,10 @@ done
 
 ### 12.1 Добавить стенд
 
-1. Сгенерируйте ключи: `ssh-keygen -t ed25519 -f ~/.ssh/mcp_<стенд>_ro -C "mcp <стенд> ro"`; при необходимости то же для `_rw`, с парольной фразой.
+1. Сгенерируйте ключи: `ssh-keygen -t ed25519 -f ~/.ssh/safety_<стенд>_ro -C "safety <стенд> ro"`; при необходимости то же для `_rw`, с парольной фразой.
 2. Соберите ключи хостов и **сверьте отпечатки** с известными вам: `ssh-keyscan -t ed25519 <адрес> >> conf/known_hosts.<стенд>`.
 3. Добавьте стенд в `inventory.json`: блок `stands.<имя>` с `ssh_user`, `known_hosts`, `keys.ro` (и `keys.rw`, если нужен) и пустыми `hosts`.
-4. Скопируйте каталог конфига в `/etc/mcp-ssh/` под root, права 0644, затем `python3 server.py check`.
+4. Скопируйте каталог конфига в `/conf` под root, права 0644, затем `python3 server.py check`.
 
 Один стенд можно заполнить, не заполняя остальные: `rw` и дополнительные стенды необязательны.
 
@@ -523,7 +523,7 @@ done
 
 1. В `hosts` стенда добавьте запись: имя, `address`, список `tags` (роли, сколько угодно).
 2. Добавьте ключ хоста в `known_hosts.<стенд>` (шаг 2 выше).
-3. Выполните `wrapper/deploy.sh <стенд> <хост> --install-keys`: сгенерирует правила, скопирует обёртку и правила в `~/.mcp-ssh/` пользователя `ssh_user` и добавит ключи ro/rw в его `~/.ssh/authorized_keys` с принудительной командой. Пользователь должен уже существовать, скрипт его не создаёт.
+3. Выполните `wrapper/deploy.sh <стенд> <хост> --install-keys`: сгенерирует правила, скопирует обёртку и правила в `~/safety-support/` пользователя `ssh_user` и добавит ключи ro/rw в его `~/.ssh/authorized_keys` с принудительной командой. Пользователь должен уже существовать, скрипт его не создаёт.
 4. Проверьте: `dev_hosts_list` показывает хост, `dev_uptime host=<хост>` отвечает.
 
 Теги задают, какие команды доступны на хосте: например, `swarm_manager` включает `swarm_nodes_list`.
@@ -587,8 +587,8 @@ wrapper/deploy.sh <стенд>        # для каждого стенда, гд
 
 ## 13. Первый запуск (вручную)
 
-Сначала один стенд `dev`, один сервер, одна учётная запись, два ключа, `MCP_SSH_ALLOW_WRITABLE=1`.
-Проверить: `dev_uptime` работает; хост другого стенда отклоняется; `dev_service_restart` создаёт заявку и ничего не выполняет, пока вы не введёте код на странице; `ssh -i prod_ro ... 'uptime; id'` отклонён (код 126), `logger`-записи `mcp-wrapper` (DENY/ALLOW) видны в syslog, если у пользователя есть доступ к журналу; `deploy.sh` печатает «ro-ключ ограничен».
+Сначала один стенд `dev`, один сервер, одна учётная запись, два ключа, `SAFETY_ALLOW_WRITABLE=1`.
+Проверить: `dev_uptime` работает; хост другого стенда отклоняется; `dev_service_restart` создаёт заявку и ничего не выполняет, пока вы не введёте код на странице; `ssh -i prod_ro ... 'uptime; id'` отклонён (код 126), `logger`-записи `safety-wrapper` (DENY/ALLOW) видны в syslog, если у пользователя есть доступ к журналу; `deploy.sh` печатает «ro-ключ ограничен».
 
 ## 14. Docker и Docker Compose
 
@@ -647,9 +647,9 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      MCP_SSH_CONF: /etc/mcp-ssh
+      SAFETY_CONF: /conf
     volumes:
-      - ./conf:/etc/mcp-ssh:ro                          # inventory.json, commands.json, known_hosts.*
+      - ./conf:/conf:ro                          # inventory.json, commands.json, known_hosts.*
       - ./keys-ro:/keys:ro                              # приватные ключи ТОЛЬКО ro (rw-ключи у approver, п. 15)
       - ./queue/requests:/queue/requests                # заявки на запись (MCP пишет)
       - ./queue/results:/queue/results:ro               # результаты (пишет approver)
@@ -671,9 +671,9 @@ safety-mcp-server/
   conf/
     inventory.json  commands.json  known_hosts.dev  known_hosts.prod
   keys-ro/
-    mcp_dev_ro  mcp_prod_ro                    # chmod 600, владелец = MCP_UID
+    safety_dev_ro  safety_prod_ro                    # chmod 600, владелец = MCP_UID
   keys-rw/                                      # только для approver, владелец = APPROVER_UID
-    mcp_dev_rw
+    safety_dev_rw
   queue/requests  queue/results  approver-state/
   state/                                        # создаётся пустой, владелец = MCP_UID
 ```
@@ -684,10 +684,10 @@ safety-mcp-server/
 
 Пути ключей **контейнерные**, а не пути хоста:
 ```json
-"keys": {"ro": "/keys/mcp_dev_ro", "rw": "/keys-rw/mcp_dev_rw"},
+"keys": {"ro": "/keys/safety_dev_ro", "rw": "/keys-rw/safety_dev_rw"},
 "known_hosts": "known_hosts.dev"
 ```
-`known_hosts` и `ca_file` берутся относительно `/etc/mcp-ssh` (то есть `./conf`).
+`known_hosts` и `ca_file` берутся относительно `/conf` (то есть `./conf`).
 
 ### 14.5 Запуск
 
@@ -703,14 +703,14 @@ claude mcp add safety-mcp-server -- docker compose -f /путь/к/safety-mcp-se
 
 Проверки без запуска MCP: `docker compose run --rm safety-mcp-server check`, `docker compose run --rm safety-mcp-server list-hosts dev`.
 
-`deploy.sh` (п. 9.4) запускай **на хосте**, не в контейнере: ему нужен ваш обычный SSH-доступ к `ssh_user`, которого у контейнера быть не должно. Для него нужен установленный `python3` и те же `conf/` и `keys/` (переменные `MCP_SSH_CONF=$PWD/conf`).
+`deploy.sh` (п. 9.4) запускай **на хосте**, не в контейнере: ему нужен ваш обычный SSH-доступ к `ssh_user`, которого у контейнера быть не должно. Для него нужен установленный `python3` и те же `conf/` и `keys/` (переменные `SAFETY_CONF=$PWD/conf`).
 
 ### 14.6 Критерии приёмки для Docker
 
 - `docker compose build` проходит на Python 3.12; на `PYTHON_VERSION=3.8` сборка падает на `pip install` (ожидаемо).
 - В контейнере: `ssh -V` работает; `python -c "from mcp.server.fastmcp import FastMCP"` проходит; `id` показывает пользователя `mcp`.
-- `docker compose run --rm safety-mcp-server check` проходит при `conf/` смонтированном `:ro` без `MCP_SSH_ALLOW_WRITABLE`.
-- Запись в `/etc/mcp-ssh` и `/keys` из контейнера невозможна (`Read-only file system`); запись в `/app` и корень тоже.
+- `docker compose run --rm safety-mcp-server check` проходит при `conf/` смонтированном `:ro` без `SAFETY_ALLOW_WRITABLE`.
+- Запись в `/conf` и `/keys` из контейнера невозможна (`Read-only file system`); запись в `/app` и корень тоже.
 - Ключ с правами `0644` в `keys/` приводит к понятной ошибке (ssh отклоняет), а не молчаливому провалу.
 
 ## 15. Подтверждение операций записи (approver, TOTP, без интернета)
@@ -807,9 +807,9 @@ Approver слушает `0.0.0.0:8765` внутри контейнера, на �
     ports:
       - "127.0.0.1:8765:8765"
     environment:
-      MCP_SSH_CONF: /etc/mcp-ssh
+      SAFETY_CONF: /conf
     volumes:
-      - ./conf:/etc/mcp-ssh:ro
+      - ./conf:/conf:ro
       - ./keys-rw:/keys-rw:ro               # ТОЛЬКО здесь
       - ./approver-state:/data              # otp.json, аудит исполнителя
       - ./queue/requests:/queue/requests:ro
@@ -852,3 +852,9 @@ Approver слушает `0.0.0.0:8765` внутри контейнера, на �
   `local/mcp-token` (монтируется в `/run/mcp-token`, создаёт `init-local.sh`), без него сервер не стартует.
   `Host`/`Origin` проверяются (DNS-rebinding). Клиент — opencode `"type": "remote"`. Режим stdio остаётся
   для отладки: `MCP_TRANSPORT=stdio`.
+- **Имена на серверах без `mcp`**: всё своё — в `~/safety-support/` (`safety-wrapper`, `rules.ro|rw`,
+  `backup/` с бэкапами `authorized_keys`); ключи `safety_<стенд>_ro|rw` с комментарием `safety <стенд> ro|rw`;
+  тег syslog `safety-wrapper`; тестовый каталог rw-команд — `~/safety-sandbox`. Обёртка (VERSION=3) всегда
+  отклоняет команды, затрагивающие `safety-support` или `.ssh`. Конфиг в контейнере — `/conf`,
+  переменные `SAFETY_CONF`, `SAFETY_HOME`, `SAFETY_ALLOW_WRITABLE`. `deploy.sh --install-keys` заменяет строку
+  с тем же ключом, а не дублирует; по умолчанию берёт конфиг из `local/conf`.

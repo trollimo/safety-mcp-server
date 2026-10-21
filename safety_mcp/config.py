@@ -19,7 +19,7 @@ PARAM_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 ADDRESS_RE = re.compile(r"^[A-Za-z0-9.:-]{1,253}$")
 SSH_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 PLACEHOLDER_RE = re.compile(r"\{([a-z][a-z0-9_]{0,31})\}")
-# Те же символы, что разрешает серверная обёртка (wrapper/mcp-wrapper).
+# Те же символы, что разрешает серверная обёртка (wrapper/safety-wrapper).
 CMD_CHARSET_RE = re.compile(r"^[A-Za-z0-9 ._@:/=,%+-]{1,300}$")
 
 RESERVED_STANDS = {"global"}
@@ -386,16 +386,16 @@ def _check_not_writable(paths: list[str]) -> None:
     writable = [p for p in paths if os.path.exists(p) and os.access(p, os.W_OK)]
     if not writable:
         return
-    if os.environ.get("MCP_SSH_ALLOW_WRITABLE") == "1":
+    if os.environ.get("SAFETY_ALLOW_WRITABLE") == "1":
         print(f"ПРЕДУПРЕЖДЕНИЕ: конфиг доступен на запись ({', '.join(writable)}); "
-              "MCP_SSH_ALLOW_WRITABLE=1 допустим только для отладки", file=sys.stderr)
+              "SAFETY_ALLOW_WRITABLE=1 допустим только для отладки", file=sys.stderr)
         return
     raise _err("конфиг доступен на запись текущему пользователю: " + ", ".join(writable)
                + ". Сделайте файлы root:root 0644 или смонтируйте каталог только для чтения (:ro).")
 
 
 def load_config(conf_dir: str | None = None, check_writable: bool = True) -> Config:
-    conf_dir = os.path.abspath(conf_dir or os.environ.get("MCP_SSH_CONF", "/etc/mcp-ssh"))
+    conf_dir = os.path.abspath(conf_dir or os.environ.get("SAFETY_CONF", "/conf"))
     inv_path = os.path.join(conf_dir, "inventory.json")
     cmd_path = os.path.join(conf_dir, "commands.json")
     raw_bytes = b""

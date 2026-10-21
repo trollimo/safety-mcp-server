@@ -122,9 +122,9 @@ def test_write_pick_all_allowed(make_cfg):
 
 def test_param_object_with_description(make_cfg):
     c = copy.deepcopy(COMMANDS)
-    c["common"]["write"]["file_create"]["params"]["path"] = {"pattern": "mcp-sandbox/[a-z]+", "description": "Путь"}
+    c["common"]["write"]["file_create"]["params"]["path"] = {"pattern": "safety-sandbox/[a-z]+", "description": "Путь"}
     cmd = make_cfg(commands=c).command("dev", "file_create")
-    assert cmd.params == {"path": "mcp-sandbox/[a-z]+"} and cmd.param_desc == {"path": "Путь"}
+    assert cmd.params == {"path": "safety-sandbox/[a-z]+"} and cmd.param_desc == {"path": "Путь"}
     for bad in ({"description": "x"}, {"pattern": r"\d+"}, {"pattern": "a", "x": 1}, {"pattern": "a", "description": 5}):
         c["common"]["write"]["file_create"]["params"]["path"] = bad
         with pytest.raises(ConfigError):
@@ -147,7 +147,7 @@ def test_unknown_type_rejected(make_cfg):
 
 
 def test_writable_config_refused(tmp_path, monkeypatch):
-    monkeypatch.delenv("MCP_SSH_ALLOW_WRITABLE", raising=False)
+    monkeypatch.delenv("SAFETY_ALLOW_WRITABLE", raising=False)
     d = write_conf(str(tmp_path / "c"))
     with pytest.raises(ConfigError, match="на запись"):
         load_config(d)
@@ -156,7 +156,7 @@ def test_writable_config_refused(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root пишет в любые файлы")
 def test_readonly_config_accepted(tmp_path, monkeypatch):
-    monkeypatch.delenv("MCP_SSH_ALLOW_WRITABLE", raising=False)
+    monkeypatch.delenv("SAFETY_ALLOW_WRITABLE", raising=False)
     d = write_conf(str(tmp_path / "c"))
     for n in os.listdir(d):
         os.chmod(os.path.join(d, n), 0o444)
@@ -168,7 +168,7 @@ def test_readonly_config_accepted(tmp_path, monkeypatch):
 
 
 def test_missing_known_hosts_file(tmp_path, monkeypatch):
-    monkeypatch.setenv("MCP_SSH_ALLOW_WRITABLE", "1")
+    monkeypatch.setenv("SAFETY_ALLOW_WRITABLE", "1")
     d = write_conf(str(tmp_path / "c"))
     os.unlink(os.path.join(d, "known_hosts.dev"))
     with pytest.raises(ConfigError, match="known_hosts"):

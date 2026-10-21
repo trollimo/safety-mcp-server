@@ -1,4 +1,4 @@
-"""Генерация правил для серверной обёртки mcp-wrapper из commands.json."""
+"""Генерация правил для серверной обёртки safety-wrapper из commands.json."""
 from __future__ import annotations
 
 import hashlib

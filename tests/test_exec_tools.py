@@ -147,7 +147,7 @@ def test_ro_hosts_list_per_stand(cfg, queue):
 
 def test_write_tool_requires_enrollment(cfg, queue, fake):
     t = tools(cfg, queue)
-    out = t["dev_rw_file_create"].fn(host="dev-w1", path="mcp-sandbox/a.txt")
+    out = t["dev_rw_file_create"].fn(host="dev-w1", path="safety-sandbox/a.txt")
     assert out.startswith("ОШИБКА: OTP не настроен") and "approver enroll" in out and "ro) работают" in out
     assert "approver enroll" in t["stands_list"].fn()
     assert t["rw_approve"].fn(id="0" * 32, code="123456").startswith("ОШИБКА")
@@ -159,11 +159,11 @@ def test_write_tool_requires_enrollment(cfg, queue, fake):
 def test_write_tool_creates_request_not_ssh(cfg, queue, fake):
     queue.write_status(True)
     t = tools(cfg, queue)
-    out = t["dev_rw_file_create"].fn(host="dev-w1", path="mcp-sandbox/a.txt")
+    out = t["dev_rw_file_create"].fn(host="dev-w1", path="safety-sandbox/a.txt")
     assert "ЗАЯВКА СОЗДАНА" in out and not fake.calls
     rid = queue.request_ids()[0]
     req = queue.request(rid)
-    assert req["cmd"] == "touch -- mcp-sandbox/a.txt" and req["hosts"] == ["dev-w1"]
+    assert req["cmd"] == "touch -- safety-sandbox/a.txt" and req["hosts"] == ["dev-w1"]
     assert t["rw_result"].fn(id=rid).startswith("ещё не выполнена")
     assert "ОШИБКА" in t["rw_result"].fn(id="../../etc/passwd")
     assert "ОШИБКА" in t["dev_rw_file_create"].fn(host="dev-w1", path="/etc/passwd")
@@ -173,7 +173,7 @@ def test_no_key_paths_in_outputs(cfg, queue, fake):
     queue.write_status(True)
     t = tools(cfg, queue)
     outs = [t["stands_list"].fn(), t["dev_ro_hosts_list"].fn(tag=None), t["dev_ro_disk_free_all"].fn(),
-            t["dev_rw_file_create"].fn(host="dev-w1", path="mcp-sandbox/a")]
+            t["dev_rw_file_create"].fn(host="dev-w1", path="safety-sandbox/a")]
     outs += [x.description for x in t.values()]
     for o in outs:
         assert "/keys" not in o
@@ -231,10 +231,10 @@ def test_dry_run_false_executes(cfg, queue, fake):
 
 def test_dry_run_rw_creates_no_request(cfg, queue, fake):
     t = tools(cfg, queue)
-    out = t["dev_rw_file_create"].fn(host="dev-w1", path="mcp-sandbox/a.txt", dry_run=True)  # OTP не настроен
-    assert "ПРОБНЫЙ ЗАПУСК" in out and "команда: touch -- mcp-sandbox/a.txt" in out and "заявка НЕ создана" in out
+    out = t["dev_rw_file_create"].fn(host="dev-w1", path="safety-sandbox/a.txt", dry_run=True)  # OTP не настроен
+    assert "ПРОБНЫЙ ЗАПУСК" in out and "команда: touch -- safety-sandbox/a.txt" in out and "заявка НЕ создана" in out
     queue.write_status(True)
-    t["dev_rw_file_create"].fn(host="dev-w1", path="mcp-sandbox/a.txt", dry_run=True)
+    t["dev_rw_file_create"].fn(host="dev-w1", path="safety-sandbox/a.txt", dry_run=True)
     assert queue.request_ids() == [] and not fake.calls
 
 
@@ -270,7 +270,7 @@ def test_unknown_params_rejected_not_ignored(cfg, queue, fake):
 def test_write_multi_host_one_request(cfg, queue, fake):
     queue.write_status(True)
     t = tools(cfg, queue)
-    out = t["dev_rw_file_create"].fn(host="dev-w2, dev-w1,dev-m1", path="mcp-sandbox/a")
+    out = t["dev_rw_file_create"].fn(host="dev-w2, dev-w1,dev-m1", path="safety-sandbox/a")
     assert "хосты (3): dev-m1,dev-w1,dev-w2" in out and "ОДНИМ кодом" in out and not fake.calls
     assert len(queue.request_ids()) == 1
     assert queue.request(queue.request_ids()[0])["hosts"] == ["dev-m1", "dev-w1", "dev-w2"]
@@ -285,7 +285,7 @@ def test_write_multi_host_one_request(cfg, queue, fake):
 ])
 def test_write_multi_host_rejects_foreign_and_bad(cfg, queue, fake, hosts, msg):
     queue.write_status(True)
-    out = tools(cfg, queue)["dev_rw_file_create"].fn(host=hosts, path="mcp-sandbox/a")
+    out = tools(cfg, queue)["dev_rw_file_create"].fn(host=hosts, path="safety-sandbox/a")
     assert out.startswith("ОШИБКА") and msg in out, out
     assert queue.request_ids() == [] and not fake.calls
 
@@ -303,7 +303,7 @@ def test_write_pick_all_one_request(make_cfg, queue, fake):
     c["common"]["write"]["file_create"]["pick"] = "all"
     cfg = make_cfg(commands=c)
     queue.write_status(True)
-    out = tools(cfg, queue)["dev_rw_file_create"].fn(path="mcp-sandbox/a")
+    out = tools(cfg, queue)["dev_rw_file_create"].fn(path="safety-sandbox/a")
     assert "хосты (3)" in out and len(queue.request_ids()) == 1
 
 
@@ -313,16 +313,16 @@ def test_param_description_in_schema(make_cfg, queue):
     from mcp.server.fastmcp import FastMCP
     c = copy.deepcopy(COMMANDS)
     c["common"]["write"]["file_create"]["params"]["path"] = {
-        "pattern": "mcp-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}", "description": "Путь внутри ~/mcp-sandbox"}
+        "pattern": "safety-sandbox(/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){1,4}", "description": "Путь внутри ~/safety-sandbox"}
     cfg = make_cfg(commands=c)
     m = FastMCP("t")
     for s in build_tools(cfg, queue, Audit(None), "http://x"):
         m.add_tool(s.fn, name=s.name, description=s.description)
     listed = {x.name: x for x in asyncio.run(m.list_tools())}
     path = listed["dev_rw_file_create"].inputSchema["properties"]["path"]
-    assert path["description"] == "Путь внутри ~/mcp-sandbox" and path["pattern"].startswith("^(mcp-sandbox")
+    assert path["description"] == "Путь внутри ~/safety-sandbox" and path["pattern"].startswith("^(safety-sandbox")
     host = listed["dev_rw_file_create"].inputSchema["properties"]["host"]
     assert "через запятую" in host["description"]
     logs = listed["dev_ro_logs"].inputSchema["properties"]["unit"]
     assert logs["description"].startswith("Шаблон:")       # без описания в конфиге — шаблон
-    assert "Путь внутри ~/mcp-sandbox" in listed["dev_rw_file_create"].description
+    assert "Путь внутри ~/safety-sandbox" in listed["dev_rw_file_create"].description

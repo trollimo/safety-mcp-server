@@ -60,8 +60,8 @@ def test_no_matching_host(cfg):
 def test_build_command_ok(cfg):
     cmd = cfg.command("dev", "logs")
     assert build_command(cmd, {"unit": "ssh", "n": "50"}) == "journalctl --no-pager -u ssh -n 50"
-    assert build_command(cfg.command("dev", "file_create"), {"path": "mcp-sandbox/a/b.txt"}) == \
-        "touch -- mcp-sandbox/a/b.txt"
+    assert build_command(cfg.command("dev", "file_create"), {"path": "safety-sandbox/a/b.txt"}) == \
+        "touch -- safety-sandbox/a/b.txt"
 
 
 @pytest.mark.parametrize("value", ["ssh; id", "$(id)", "-f", "", "a b", "`id`", "ssh\nid", "../x"])
@@ -70,8 +70,8 @@ def test_build_command_rejects_injection(cfg, value):
         build_command(cfg.command("dev", "logs"), {"unit": value, "n": "5"})
 
 
-@pytest.mark.parametrize("path", ["mcp-sandbox", "mcp-sandbox/../etc/passwd", "/etc/passwd", "mcp-sandbox/.ssh",
-                                  "mcp-sandbox/a/b/c/d/e", "mcp-sandbox//a", "x/mcp-sandbox/a", "mcp-sandbox/-rf"])
+@pytest.mark.parametrize("path", ["safety-sandbox", "safety-sandbox/../etc/passwd", "/etc/passwd", "safety-sandbox/.ssh",
+                                  "safety-sandbox/a/b/c/d/e", "safety-sandbox//a", "x/safety-sandbox/a", "safety-sandbox/-rf"])
 def test_path_param_rejects_escape(cfg, path):
     with pytest.raises(ToolError):
         build_command(cfg.command("dev", "file_delete"), {"path": path})
@@ -101,7 +101,7 @@ def test_gen_rules_by_tags_and_role(cfg):
     assert r"sudo -n docker node ls" in ro_m and r"sudo -n docker node ls" not in ro_w
     assert "df -h /" in ro_w and "df -h /" not in ro_m
     assert "uptime" in ro_m  # dev_only: команда стенда dev
-    rw = gen_rules(cfg, "dev", "dev-w1", "rw").splitlines()
+    rw = [r for r in gen_rules(cfg, "dev", "dev-w1", "rw").splitlines() if not r.startswith("#")]
     assert any(r.startswith("touch -- ") for r in rw) and not any("df" in r for r in rw)
 
 
@@ -116,6 +116,6 @@ def test_gen_rules_rw_without_key(cfg):
 
 def test_matches_write_rule(cfg):
     st, h = cfg.stands["dev"], cfg.stands["dev"].hosts["dev-w1"]
-    assert matches_write_rule(cfg, st, h, "touch -- mcp-sandbox/x").name == "file_create"
-    assert matches_write_rule(cfg, st, h, "rm -rf -- mcp-sandbox/x") is None
+    assert matches_write_rule(cfg, st, h, "touch -- safety-sandbox/x").name == "file_create"
+    assert matches_write_rule(cfg, st, h, "rm -rf -- safety-sandbox/x") is None
     assert matches_write_rule(cfg, st, h, "df -h") is None

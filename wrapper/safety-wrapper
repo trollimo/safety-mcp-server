@@ -1,28 +1,31 @@
 #!/bin/bash
-# mcp-wrapper <ro|rw>: принудительная команда для ключа MCP в ~/.ssh/authorized_keys.
-# Лежит в ~/.mcp-ssh/mcp-wrapper (копирует deploy.sh), правила рядом: rules.ro / rules.rw.
+# safety-wrapper <ro|rw>: принудительная команда для ключей safety в ~/.ssh/authorized_keys.
+# Лежит в ~/safety-support/safety-wrapper (копирует deploy.sh), правила рядом: rules.ro / rules.rw.
 # Разрешает только команды, целиком совпадающие с одним из regex в файле правил; shell не используется.
-VERSION=2
-[[ "${1:-}" == "--version" ]] && { echo "mcp-wrapper $VERSION"; exit 0; }
+VERSION=3
+[[ "${1:-}" == "--version" ]] && { echo "safety-wrapper $VERSION"; exit 0; }
 set -u
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 role="${1:-}"
 [[ "$role" == ro || "$role" == rw ]] || { echo "bad role" >&2; exit 126; }
-base="${MCP_SSH_HOME:-$HOME/.mcp-ssh}"        # MCP_SSH_HOME нужен только для тестов
+base="${SAFETY_HOME:-$HOME/safety-support}"        # SAFETY_HOME нужен только для тестов
 rules="$base/rules.$role"
 cmd="${SSH_ORIGINAL_COMMAND:-}"
 from="${SSH_CLIENT:-local}"; from="${from%% *}"
-deny() { logger -t mcp-wrapper "DENY role=$role from=$from cmd=$cmd" 2>/dev/null; echo "denied" >&2; exit 126; }
+deny() { logger -t safety-wrapper "DENY role=$role from=$from cmd=$cmd" 2>/dev/null; echo "denied" >&2; exit 126; }
 
 [[ -r "$rules" && -n "$cmd" ]] || deny
 charre='^[A-Za-z0-9 ._@:/=,%+-]{1,300}$'      # без ; | & $ ` > < * кавычек и переводов строк
 [[ $cmd =~ $charre ]] || deny
+# служебные каталоги неприкосновенны, даже если правило случайно это разрешает
+protre='safety-support|(^|[^A-Za-z0-9_-])\.ssh([^A-Za-z0-9_-]|$)'
+[[ $cmd =~ $protre ]] && deny
 
 while IFS= read -r re || [[ -n "$re" ]]; do
   [[ -z "$re" || "$re" == \#* ]] && continue
   full="^(${re})\$"
   if [[ $cmd =~ $full ]]; then
-    logger -t mcp-wrapper "ALLOW role=$role from=$from cmd=$cmd" 2>/dev/null
+    logger -t safety-wrapper "ALLOW role=$role from=$from cmd=$cmd" 2>/dev/null
     read -ra argv <<<"$cmd"                   # деление по пробелам, shell не участвует
     exec "${argv[@]}"
   fi
