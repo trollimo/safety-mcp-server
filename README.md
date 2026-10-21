@@ -88,6 +88,11 @@ docker compose build
 
 ### 2. Ключи и каталоги
 
+Все каталоги данных создаются **рядом с `docker-compose.yml`**. Если хотите держать их отдельно
+(например, в `~/safety-mcp-data`), создайте их там и добавляйте к каждой команде `docker compose`
+параметры `--project-directory ~/safety-mcp-data -f /путь/к/docker-compose.yml`. Если каталога нет,
+compose завершится ошибкой, а не создаст пустой.
+
 ```bash
 ssh-keygen -t ed25519 -N "" -f ~/.ssh/mcp_<стенд>_ro
 ssh-keygen -t ed25519 -N "" -f ~/.ssh/mcp_<стенд>_rw

@@ -259,7 +259,8 @@ def load_config(conf_dir: str | None = None, check_writable: bool = True) -> Con
             with open(path, "rb") as f:
                 b = f.read()
         except OSError as e:
-            raise _err(f"не удалось прочитать {path}: {e.strerror}") from e
+            raise _err(f"не удалось прочитать {path}: {e.strerror}. Проверьте, что каталог конфига смонтирован: "
+                       "в Docker это ./conf рядом с docker-compose.yml или в каталоге из --project-directory") from e
         raw_bytes += b
         try:
             data[label] = json.loads(b)

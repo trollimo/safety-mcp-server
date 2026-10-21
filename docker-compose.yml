@@ -1,4 +1,6 @@
 # MCP-сервер (его видит агент) и approver (подтверждение записи) — один образ, разные пользователи и тома.
+# Каталоги данных (conf, keys-ro, keys-rw, state, queue, approver-state) ищутся рядом с этим файлом
+# или в каталоге, заданном через: docker compose --project-directory <каталог> -f docker-compose.yml ...
 x-hardening: &hardening
   read_only: true
   tmpfs:
@@ -28,11 +30,34 @@ services:
       APPROVER_URL: http://127.0.0.1:8765
       MCP_ENROLL_HINT: "${MCP_ENROLL_HINT:-docker compose run --rm approver enroll --account <имя>}"
     volumes:
-      - ./conf:/etc/mcp-ssh:ro               # inventory.json, commands.json, known_hosts.*
-      - ./keys-ro:/keys:ro                   # ТОЛЬКО ro-ключи
-      - ./state:/state                       # audit.log
-      - ./queue/requests:/queue/requests     # MCP пишет заявки
-      - ./queue/results:/queue/results:ro    # результаты пишет approver
+      - type: bind                 # inventory.json, commands.json, known_hosts.*
+        source: ./conf
+        target: /etc/mcp-ssh
+        read_only: true
+        bind:
+          create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
+      - type: bind                 # ТОЛЬКО ro-ключи
+        source: ./keys-ro
+        target: /keys
+        read_only: true
+        bind:
+          create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
+      - type: bind                 # audit.log
+        source: ./state
+        target: /state
+        bind:
+          create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
+      - type: bind                 # MCP пишет заявки
+        source: ./queue/requests
+        target: /queue/requests
+        bind:
+          create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
+      - type: bind                 # результаты пишет approver
+        source: ./queue/results
+        target: /queue/results
+        read_only: true
+        bind:
+          create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
 
   approver:
     <<: *hardening
@@ -47,8 +72,31 @@ services:
     ports:
       - "127.0.0.1:8765:8765"              # страница доступна только с этой машины
     volumes:
-      - ./conf:/etc/mcp-ssh:ro
-      - ./keys-rw:/keys-rw:ro                # ТОЛЬКО здесь
-      - ./approver-state:/data               # otp.json, аудит approver
-      - ./queue/requests:/queue/requests:ro
-      - ./queue/results:/queue/results
+      - type: bind
+        source: ./conf
+        target: /etc/mcp-ssh
+        read_only: true
+        bind:
+          create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
+      - type: bind                 # ТОЛЬКО здесь
+        source: ./keys-rw
+        target: /keys-rw
+        read_only: true
+        bind:
+          create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
+      - type: bind                 # otp.json, аудит approver
+        source: ./approver-state
+        target: /data
+        bind:
+          create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
+      - type: bind
+        source: ./queue/requests
+        target: /queue/requests
+        read_only: true
+        bind:
+          create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
+      - type: bind
+        source: ./queue/results
+        target: /queue/results
+        bind:
+          create_host_path: false   # нет каталога -> ошибка, а не пустой каталог от root
